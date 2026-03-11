@@ -766,6 +766,7 @@ def main() -> None:
 
     model = config["model"]
     max_tokens = config["max_tokens"]
+    analyst_max_tokens = config.get("analyst_max_tokens", 16384)
     n_iterations = config["n_iterations"]
     archive_path = config["archive_file"]
     context_path = config["active_context_file"]
@@ -821,6 +822,7 @@ def main() -> None:
     logger.info(f"Runs   : {n_iterations}  |  Mode: {config['repetition_mode']}")
     logger.info(f"Interval: {config['interval_minutes']} min  |  Summarizer every {summarizer_every} iters")
     logger.info(f"Retries : up to {max_code_retries} per iteration")
+    logger.info(f"Tokens  : analyst={analyst_max_tokens}  critic={max_tokens}")
     logger.info(f"Graphs  : {graphs_folder}")
     logger.info(f"Log     : {log_file}")
     logger.info(f"Debug   : {'ON' if debug_logging else 'OFF (set debug_logging: true in config.yaml)'}")
@@ -848,7 +850,7 @@ def main() -> None:
             logger.info("  [Analyst] Planning analysis...")
             analyst_msg = build_analyst_user_message(task_content, context, iteration, config)
             raw_analyst, in_tok, out_tok = call_llm(
-                client, ANALYST_SYSTEM_PROMPT, analyst_msg, model, max_tokens, tag="Analyst"
+                client, ANALYST_SYSTEM_PROMPT, analyst_msg, model, analyst_max_tokens, tag="Analyst"
             )
             total_input_tokens += in_tok
             total_output_tokens += out_tok
@@ -905,7 +907,7 @@ def main() -> None:
                     parsed, stdout, stderr, retry_count,
                 )
                 raw_retry, in_tok, out_tok = call_llm(
-                    client, ANALYST_SYSTEM_PROMPT, retry_msg, model, max_tokens,
+                    client, ANALYST_SYSTEM_PROMPT, retry_msg, model, analyst_max_tokens,
                     tag=f"Retry{retry_count}",
                 )
                 total_input_tokens += in_tok

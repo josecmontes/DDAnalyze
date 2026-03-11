@@ -5,6 +5,7 @@ hybrid_threshold: 12         # if hybrid: switch from soft to hard after this it
 summarizer_every_n: 10       # run Summarizer every N iterations
 model: claude-sonnet-4-6
 max_tokens: 4096
+analyst_max_tokens: 16384   # Analyst returns JSON with embedded Python code; needs more room
 data_file: workspace/data.xlsx
 task_file: task.md
 active_context_file: active_context.md
