@@ -159,6 +159,38 @@ Your job:
 10. Readers expect year-by-year tables (Fiscal year if given, else natural years).
     When the last year is incomplete, use LTM (Last-Twelve-Months). Include CAGR when applicable."""
 
+ARCHIVE_SUMMARIZER_SYSTEM_PROMPT = """You are the Summarizer agent in an autonomous data analysis loop. \
+The active knowledge base is empty or stale. Your job is to RECONSTRUCT it from scratch using the full iteration \
+archive provided.
+
+The archive contains one block per iteration in this format:
+  ITERATION / DATE / STATUS / ANALYSIS TYPE / HYPOTHESIS / COLUMNS USED / CODE / OUTPUT / STDERR / EVALUATION
+
+Your job:
+1. Produce the full content of active_context.md using EXACTLY this structure (preserve all section headers):
+
+   # Active Knowledge Base
+   ## Overarching Goal
+   ## Established Facts
+   ## Analysis Index
+   ## What Has Been Tried
+   ## Dead Ends & Closed Paths
+   ## Generated Graphs
+   ## Open Questions / Suggested Next Steps
+
+2. Analysis Index — one row per iteration (success and failure), columns: Iter | Type | Columns Used | Status | Date
+3. Established Facts — synthesise all confirmed findings from SUCCESS iterations. Merge overlapping facts.
+   Include year-by-year tables (with LTM and CAGR) where the data supports it.
+4. What Has Been Tried — one line per iteration describing what was done and what was found (or why it failed).
+5. Dead Ends & Closed Paths — list every direction confirmed NOT worth pursuing (from EVALUATION dead_ends fields
+   and failed iterations).
+6. Generated Graphs — one row per graph ever saved: Iter | Filename | Description. Extract from OUTPUT lines
+   that start with "GRAPH_SAVED:".
+7. Open Questions / Suggested Next Steps — synthesise the most relevant 5–8 open threads from EVALUATION
+   suggested_followup fields, prioritising recent iterations.
+8. Do not invent findings. Only use what is in the archive.
+9. Return the full new content of active_context.md as plain text. No JSON. No preamble."""
+
 ACTIVE_CONTEXT_TEMPLATE = """# Active Knowledge Base
 
 ## Overarching Goal
@@ -767,12 +799,17 @@ def main() -> None:
 
     # ── summarize_on_start ────────────────────────────────────────────────────
     if config.get("summarize_on_start", False) and not config.get("fresh_start", False):
-        print("[summarize_on_start] Compressing active_context.md before first iteration...")
-        current_ctx = read_file(context_path)
-        summarizer_msg = f"Current iteration: 0 of {n_iterations} total.\n\n" + current_ctx
-        new_ctx = call_llm(client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens)
+        print("[summarize_on_start] Reconstructing active_context.md from full_archive.txt...")
+        archive_content = read_file(archive_path) if Path(archive_path).exists() else ""
+        goal = _extract_goal_from_task(task_content)
+        summarizer_msg = (
+            f"Overarching Goal:\n{goal}\n\n"
+            f"Total planned iterations for next run: {n_iterations}\n\n"
+            f"--- FULL ARCHIVE ---\n{archive_content}"
+        )
+        new_ctx = call_llm(client, ARCHIVE_SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens)
         write_file(context_path, new_ctx)
-        print("[summarize_on_start] active_context.md compressed")
+        print("[summarize_on_start] active_context.md reconstructed from archive")
 
     # ── Banner ───────────────────────────────────────────────────────────────
     logger.info(f"\n{'=' * 60}")
