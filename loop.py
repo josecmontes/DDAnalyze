@@ -534,6 +534,8 @@ def _extract_graph_saves(stdout: str, graphs_folder: str) -> list:
         filename = filename.strip()
         description = description.strip()
 
+        # Use only the basename in case the Analyst printed the full path
+        filename = Path(filename).name
         graph_path = Path(graphs_folder) / filename
         if graph_path.exists():
             graphs.append((filename, description))
@@ -720,6 +722,7 @@ def run_code(script_path: str, timeout: int = 120) -> tuple:
             [sys.executable, script_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
         )
         elapsed = time.time() - t0
