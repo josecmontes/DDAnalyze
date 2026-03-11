@@ -110,14 +110,20 @@ When the dataset ends mid-year, compute CAGR using the fractional number of year
   CAGR = (LTM_value / FY_first_value) ^ (1 / N) − 1
 Always print N explicitly (e.g. "CAGR (N=2.25y)") so readers understand the time span.
 
-Table format (print with print() and aligned columns):
+Table format — TRANSPOSED (columns = time periods, rows = metrics):
+Print with print() and aligned columns. This is the standard layout:
 
-  Year           | Metric A  | Metric B  | YoY %
-  ---------------|-----------|-----------|-------
-  FY2021         |    x      |    x      |  —
-  FY2022         |    x      |    x      | +X%
-  LTM23          |    x      |    x      | +X%    ← always LTM, never a raw partial year
-  CAGR (N=2.25y) |           |           | XX%
+  Metric    | FY2021 | FY2022 | LTM23 | CAGR (N=2.25y)
+  ----------|--------|--------|-------|---------------
+  Metric A  |   x    |   x    |   x   |     XX%
+  Metric B  |   x    |   x    |   x   |     XX%
+  YoY %     |   —    |  +X%   |  +X%  |
+
+Rules:
+- Columns left-to-right: full fiscal years in order, then LTM (if applicable), then CAGR as the last column.
+- CAGR column applies to the row metrics (not YoY %). Use fractional N and label it "CAGR (N=X.XXy)".
+- Use this transposed layout whenever the table represents time-series data by year.
+- For other table types (e.g. rankings, client lists, segment breakdowns) use whatever layout is clearest.
 
 Always compute and print CAGR when you have 3+ years of data (use fractional N for partial years).
 Use pandas tabulate or manual string formatting — never raw DataFrame repr.
