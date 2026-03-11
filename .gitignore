@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+venv/
+
+# Data (never commit the user's dataset)
+workspace/data.xlsx
+workspace/*.xlsx
+workspace/*.csv
+
+# Auto-generated each iteration
+workspace/current_analysis.py
+
+# Loop outputs (large / generated — commit selectively if desired)
+full_archive.txt
+final_report.md
+
+# OS
+.DS_Store
+Thumbs.db

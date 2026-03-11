@@ -1,0 +1,13 @@
+n_iterations: 20
+interval_minutes: 1
+repetition_mode: soft        # soft | hard | hybrid
+hybrid_threshold: 12         # if hybrid: switch from soft to hard after this iteration
+summarizer_every_n: 10       # run Summarizer every N iterations
+model: claude-sonnet-4-6
+max_tokens: 4096
+data_file: workspace/data.xlsx
+task_file: task.md
+active_context_file: active_context.md
+archive_file: full_archive.txt
+workspace_script: workspace/current_analysis.py
+fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run
