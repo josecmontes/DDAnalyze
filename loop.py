@@ -87,21 +87,45 @@ Your job:
 5. Return ONLY a valid JSON object with fields: hypothesis, analysis_type, columns_used, code.
    No preamble. No markdown. No explanation outside the JSON.
 
-MANDATORY — YEARLY TABLES:
+MANDATORY — YEARLY TABLES AND LTM:
 For any analysis spanning multiple time periods (revenue trends, customer counts, retention, etc.)
-you MUST produce a structured year-by-year comparison table. Use exactly 3–4 fiscal/calendar years
-plus an LTM (Last-Twelve-Months) column when the latest year is incomplete.
-Table format (print with print() and aligned columns):
+you MUST produce a structured year-by-year comparison table using ONLY full 12-month windows.
 
-  Year    | Metric A  | Metric B  | YoY %
-  --------|-----------|-----------|-------
-  FY2021  |    x      |    x      |  —
-  FY2022  |    x      |    x      | +X%
-  FY2023  |    x      |    x      | +X%
-  LTM     |    x      |    x      | +X%
-  CAGR    |           |           | XX%
+CRITICAL RULE — PARTIAL YEARS (read carefully):
+If the latest calendar year is incomplete (fewer than 12 months of data), you MUST:
+1. Detect the latest available month in the data (e.g. max(df['Fecha_Mes'].dt.to_period('M'))).
+2. Build an LTM (Last-Twelve-Months) window = the 12 months ending at that latest month.
+   Example: if data runs through March 2023, LTM23 = Apr 2022 – Mar 2023.
+3. NEVER compare a partial year (e.g. Jan–Mar 2023) directly against a full prior year (FY2022).
+   That comparison is misleading and forbidden. Always use LTM instead.
+4. Name the LTM column with the ending year: LTM23, LTM22, etc.
+5. For the LTM YoY %: compare LTM against the same 12-month window shifted back exactly one year
+   (e.g. LTM23 vs Apr 2021 – Mar 2022).
 
-Always compute and print CAGR when you have 3+ years of data.
+CAGR WITH PARTIAL YEARS:
+When the dataset ends mid-year, compute CAGR using the fractional number of years:
+  latest_month  = last month in data (e.g. 2023-03)
+  earliest_month = first month of the first full year (e.g. 2021-01)
+  N = months between them / 12   →  e.g. 27 months / 12 = 2.25 years
+  CAGR = (LTM_value / FY_first_value) ^ (1 / N) − 1
+Always print N explicitly (e.g. "CAGR (N=2.25y)") so readers understand the time span.
+
+Table format — TRANSPOSED (columns = time periods, rows = metrics):
+Print with print() and aligned columns. This is the standard layout:
+
+  Metric    | FY2021 | FY2022 | LTM23 | CAGR (N=2.25y)
+  ----------|--------|--------|-------|---------------
+  Metric A  |   x    |   x    |   x   |     XX%
+  Metric B  |   x    |   x    |   x   |     XX%
+  YoY %     |   —    |  +X%   |  +X%  |
+
+Rules:
+- Columns left-to-right: full fiscal years in order, then LTM (if applicable), then CAGR as the last column.
+- CAGR column applies to the row metrics (not YoY %). Use fractional N and label it "CAGR (N=X.XXy)".
+- Use this transposed layout whenever the table represents time-series data by year.
+- For other table types (e.g. rankings, client lists, segment breakdowns) use whatever layout is clearest.
+
+Always compute and print CAGR when you have 3+ years of data (use fractional N for partial years).
 Use pandas tabulate or manual string formatting — never raw DataFrame repr.
 
 GRAPHS:
@@ -157,7 +181,11 @@ Your job:
 8. Do not add new analysis. Do not invent findings. Only compress what is there.
 9. Return the full new content of active_context.md as plain text. No JSON. No preamble.
 10. Readers expect year-by-year tables (Fiscal year if given, else natural years).
-    When the last year is incomplete, use LTM (Last-Twelve-Months). Include CAGR when applicable."""
+    When the last year is incomplete, always use LTM (Last-Twelve-Months = the 12 months ending
+    at the latest data point, e.g. LTM23 = Apr 2022–Mar 2023 if data ends March 2023).
+    Never show a raw partial year as a comparison column — always substitute LTM.
+    CAGR must use fractional N: N = total months from start of first full year to end of LTM / 12
+    (e.g. Jan 2021 → Mar 2023 = 27 months → N = 2.25). Print N explicitly: "CAGR (N=2.25y)"."""
 
 ARCHIVE_SUMMARIZER_SYSTEM_PROMPT = """You are the Summarizer agent in an autonomous data analysis loop. \
 The active knowledge base is empty or stale. Your job is to RECONSTRUCT it from scratch using the full iteration \
@@ -180,7 +208,11 @@ Your job:
 
 2. Analysis Index — one row per iteration (success and failure), columns: Iter | Type | Columns Used | Status | Date
 3. Established Facts — synthesise all confirmed findings from SUCCESS iterations. Merge overlapping facts.
-   Include year-by-year tables (with LTM and CAGR) where the data supports it.
+   Include year-by-year tables where the data supports it. When the last year is incomplete,
+   always use LTM (Last-Twelve-Months = 12 months ending at the latest data point, e.g. LTM23).
+   Never present a raw partial year as a comparison column. CAGR must use fractional N:
+   N = total months from start of first full year to end of LTM period / 12 (e.g. 2.25 for 27 months).
+   Always label it "CAGR (N=X.XXy)" in tables.
 4. What Has Been Tried — one line per iteration describing what was done and what was found (or why it failed).
 5. Dead Ends & Closed Paths — list every direction confirmed NOT worth pursuing (from EVALUATION dead_ends fields
    and failed iterations).
