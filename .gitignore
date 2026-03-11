@@ -17,6 +17,8 @@ venv/
 workspace/data.xlsx
 workspace/*.xlsx
 workspace/*.csv
+workspace/graphs/
+logs/
 
 # Auto-generated each iteration
 workspace/current_analysis.py
@@ -24,6 +26,7 @@ workspace/current_analysis.py
 # Loop outputs (large / generated — commit selectively if desired)
 full_archive.txt
 final_report.md
+active_context.md
 
 # OS
 .DS_Store

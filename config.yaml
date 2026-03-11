@@ -1,4 +1,4 @@
-n_iterations: 30
+n_iterations: 5
 interval_minutes: 0
 repetition_mode: soft        # soft | hard | hybrid
 hybrid_threshold: 12         # if hybrid: switch from soft to hard after this iteration
