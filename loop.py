@@ -136,7 +136,37 @@ You may (and should, when insightful) generate charts using matplotlib or seabor
     GRAPH_SAVED: <filename> — <one-line description>
 - Always call plt.close() after saving to free memory.
 - Do NOT call plt.show() — running headless.
-- Set matplotlib backend before importing pyplot: import matplotlib; matplotlib.use('Agg')"""
+- Set matplotlib backend before importing pyplot: import matplotlib; matplotlib.use('Agg')
+
+DELOITTE COLOR THEME — MANDATORY FOR ALL CHARTS:
+Every chart MUST follow the Deloitte visual identity. Apply it by importing the theme module
+at the very start of your code (right after setting the backend):
+
+    import matplotlib; matplotlib.use('Agg')
+    import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
+    import deloitte_theme
+    deloitte_theme.apply_deloitte_style()
+
+If the import fails for any reason, manually apply the theme using these exact values:
+
+    import matplotlib.pyplot as plt
+    DELOITTE_COLORS = ['#26890D', '#046A38', '#404040', '#0D8390', '#00ABAB']
+    plt.rcParams.update({
+        'font.family': ['Arial', 'Liberation Sans', 'sans-serif'],
+        'axes.prop_cycle': plt.cycler('color', DELOITTE_COLORS),
+        'axes.titlesize': 14, 'axes.titleweight': 'bold',
+        'axes.titlecolor': '#26890D',
+        'axes.spines.top': False, 'axes.spines.right': False,
+        'figure.facecolor': 'white', 'axes.facecolor': 'white',
+    })
+
+Color usage rules:
+- Data series colors (in order): #26890D (green), #046A38 (dark green), #404040 (grey),
+  #0D8390 (electric blue), #00ABAB (aqua blue).
+- Chart / figure title: always color='#26890D', fontweight='bold', font Arial.
+- Axis labels and tick labels: font Arial.
+- Example title call: ax.set_title("My Title", color='#26890D', fontweight='bold')
+- For seaborn, pass palette=DELOITTE_COLORS explicitly to each plot call."""
 
 CRITIC_SYSTEM_PROMPT = """You are the Critic agent in an autonomous data analysis loop. Your job is to evaluate \
 whether a data analysis run produced useful business insight.
