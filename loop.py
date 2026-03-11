@@ -136,7 +136,28 @@ You may (and should, when insightful) generate charts using matplotlib or seabor
     GRAPH_SAVED: <filename> — <one-line description>
 - Always call plt.close() after saving to free memory.
 - Do NOT call plt.show() — running headless.
-- Set matplotlib backend before importing pyplot: import matplotlib; matplotlib.use('Agg')"""
+- Set matplotlib backend before importing pyplot: import matplotlib; matplotlib.use('Agg')
+
+DELOITTE COLOR THEME — apply to ALL charts:
+Primary palette (use in this order for series/bars/lines):
+  #86BC25  (Deloitte Green — first/primary series)
+  #0076A8  (Deloitte Blue)
+  #62B5E5  (Light Blue)
+  #00A3E0  (Cyan)
+  #012169  (Dark Navy)
+  #BBBCBC  (Light Gray — neutral / reference lines)
+
+Apply consistently:
+- Bar charts: cycle through the primary palette per category/series.
+- Line charts: each line gets its own palette color; use markers for clarity.
+- Background: white (#FFFFFF). Grid: light gray (#EEEEEE), alpha=0.6.
+- Title: #012169 (Dark Navy), bold, fontsize 13.
+- Axis labels: #4A4A4A, fontsize 10.
+- Tick labels: #4A4A4A, fontsize 9.
+- Legend: frameon=False or subtle frame.
+- Spine: remove top and right spines (ax.spines['top'].set_visible(False), same for 'right').
+- For single-series bar charts use #86BC25 (green) uniformly.
+- Avoid red/orange/yellow unless explicitly needed for warning indicators."""
 
 CRITIC_SYSTEM_PROMPT = """You are the Critic agent in an autonomous data analysis loop. Your job is to evaluate \
 whether a data analysis run produced useful business insight.
