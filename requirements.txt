@@ -1,0 +1,8 @@
+anthropic
+python-dotenv
+pyyaml
+pandas
+openpyxl
+matplotlib
+seaborn
+python-docx
