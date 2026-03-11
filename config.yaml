@@ -1,5 +1,5 @@
-n_iterations: 20
-interval_minutes: 1
+n_iterations: 30
+interval_minutes: 0
 repetition_mode: soft        # soft | hard | hybrid
 hybrid_threshold: 12         # if hybrid: switch from soft to hard after this iteration
 summarizer_every_n: 10       # run Summarizer every N iterations
@@ -11,5 +11,5 @@ active_context_file: active_context.md
 archive_file: full_archive.txt
 workspace_script: workspace/current_analysis.py
 graphs_folder: workspace/graphs  # analyst saves PNG charts here; referenced (not read) in context
-max_code_retries: 2          # retry failed code this many times within the same iteration
+max_code_retries: 3          # retry failed code this many times within the same iteration
 fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run

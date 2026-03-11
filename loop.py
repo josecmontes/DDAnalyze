@@ -34,7 +34,7 @@ os.chdir(Path(__file__).parent)
 
 # ─── System Prompts ───────────────────────────────────────────────────────────
 
-ANALYST_SYSTEM_PROMPT = """You are the Analyst agent in an autonomous data analysis loop. Your job is to investigate \
+ANALYST_SYSTEM_PROMPT = """You are the Financial Due Dilligence Analyst agent in an autonomous data analysis loop. Your job is to investigate
 a business dataset by writing Python code that produces readable, printed output.
 
 You will receive:
@@ -105,7 +105,7 @@ Your job:
    - dead_ends: list of investigation directions confirmed not worth pursuing (may be empty list)
    No preamble. No markdown fences."""
 
-SUMMARIZER_SYSTEM_PROMPT = """You are the Summarizer agent in an autonomous data analysis loop. The active knowledge \
+SUMMARIZER_SYSTEM_PROMPT = """You are the Financial Due Dilligence Summarizer agent in an autonomous data analysis loop. The active knowledge
 base has grown and needs to be condensed so future agents can read it efficiently.
 
 Your job:
