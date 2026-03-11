@@ -799,7 +799,7 @@ def main() -> None:
 
     # ── summarize_on_start ────────────────────────────────────────────────────
     if config.get("summarize_on_start", False) and not config.get("fresh_start", False):
-        print("[summarize_on_start] Reconstructing active_context.md from full_archive.txt...")
+        logger.info("[summarize_on_start] Reconstructing active_context.md from full_archive.txt...")
         archive_content = read_file(archive_path) if Path(archive_path).exists() else ""
         goal = _extract_goal_from_task(task_content)
         summarizer_msg = (
@@ -807,9 +807,12 @@ def main() -> None:
             f"Total planned iterations for next run: {n_iterations}\n\n"
             f"--- FULL ARCHIVE ---\n{archive_content}"
         )
-        new_ctx = call_llm(client, ARCHIVE_SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens)
+        new_ctx, _, _ = call_llm(
+            client, ARCHIVE_SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens,
+            tag="SummarizeOnStart",
+        )
         write_file(context_path, new_ctx)
-        print("[summarize_on_start] active_context.md reconstructed from archive")
+        logger.info("[summarize_on_start] active_context.md reconstructed from archive")
 
     # ── Banner ───────────────────────────────────────────────────────────────
     logger.info(f"\n{'=' * 60}")
