@@ -10,9 +10,11 @@ Three-step process:
 Run this manually after loop.py finishes.
 """
 
+import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -27,6 +29,35 @@ from dotenv import load_dotenv
 
 load_dotenv()
 API_KEY = os.getenv('API_KEY')
+
+# ─── Logging Setup ────────────────────────────────────────────────────────────
+
+logger = logging.getLogger("ddanalyze.phase2")
+
+def setup_logging(debug: bool = False, log_dir: str = "logs") -> Path:
+    """Configure console + file logging. Returns the path of the log file."""
+    Path(log_dir).mkdir(exist_ok=True)
+    log_file = Path(log_dir) / f"phase2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+    console_level = logging.DEBUG if debug else logging.INFO
+
+    root = logging.getLogger("ddanalyze")
+    root.setLevel(logging.DEBUG)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(console_level)
+    ch.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    root.addHandler(ch)
+
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)-7s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(fh)
+
+    return log_file
 
 # ─── System Prompt ────────────────────────────────────────────────────────────
 
@@ -92,11 +123,16 @@ def parse_archive(archive_text: str) -> list:
     """
     separator = "=" * 80
     entries = []
+    all_blocks = 0
+    skipped_internal = 0
+    skipped_non_success = 0
 
     for block in archive_text.split(separator):
         block = block.strip()
         if not block or "ITERATION:" not in block:
             continue
+
+        all_blocks += 1
 
         # Skip internal error blocks
         status_match = re.search(r"\nSTATUS:\s*(\S+)", block)
@@ -104,8 +140,10 @@ def parse_archive(archive_text: str) -> list:
             continue
         status = status_match.group(1).strip()
         if status.upper() in _INTERNAL_ERROR_LABELS:
+            skipped_internal += 1
             continue
         if status.lower() != "success":
+            skipped_non_success += 1
             continue
 
         entry: dict = {"status": status}
@@ -145,6 +183,11 @@ def parse_archive(archive_text: str) -> list:
         if "iteration" in entry:
             entries.append(entry)
 
+    logger.debug(
+        f"[Archive] Parsed {all_blocks} blocks: "
+        f"{len(entries)} success, {skipped_non_success} failure/unknown, "
+        f"{skipped_internal} internal errors"
+    )
     return entries
 
 # ─── Step A: Code Extraction ──────────────────────────────────────────────────
@@ -180,7 +223,7 @@ def extract_code_to_file(entries: list, output_path: str) -> None:
         lines.append("\n---\n")
 
     write_file(output_path, "".join(lines))
-    print(f"  Extracted code saved to: {output_path}")
+    logger.info(f"  Extracted code saved to: {output_path} ({len(entries)} analyses)")
 
 # ─── Step B: LLM Report Generation ───────────────────────────────────────────
 
@@ -323,14 +366,18 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
         from docx import Document
         from docx.shared import Inches, Pt
     except ImportError:
-        print(
+        logger.warning(
             "\n[WARNING] python-docx is not installed. Cannot create Word document.\n"
             "Install it with:  pip install python-docx\n"
             "The markdown report (final_report.md) was saved and is complete.\n"
         )
         return
 
+    t0 = time.time()
     doc = Document()
+    graphs_embedded = 0
+    graphs_missing = 0
+    tables_added = 0
 
     # Set page margins
     for section in doc.sections:
@@ -363,6 +410,8 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
                 data_lines.append(lines[i].strip())
                 i += 1
             _add_markdown_table_to_doc(doc, header_line, data_lines)
+            tables_added += 1
+            logger.debug(f"[DocBuilder] Added table with {len(data_lines)} data rows")
             continue  # already advanced i
 
         # ── Graph references: [GRAPH: filename.png] ───────────────────────────
@@ -380,10 +429,15 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
                             p = doc.add_paragraph(caption)
                             for run in p.runs:
                                 run.italic = True
+                        graphs_embedded += 1
+                        logger.debug(f"[DocBuilder] Embedded graph: {filename}")
                     except Exception as e:
                         doc.add_paragraph(f"[Could not embed graph {filename}: {e}]")
+                        logger.warning(f"[DocBuilder] Failed to embed graph {filename}: {e}")
                 else:
                     doc.add_paragraph(f"[Graph not found: {filename}]")
+                    graphs_missing += 1
+                    logger.warning(f"[DocBuilder] Graph not found: {img_path}")
             else:
                 _add_formatted_paragraph(doc, stripped)
 
@@ -395,10 +449,13 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
                 if Path(img_path).exists():
                     try:
                         doc.add_picture(img_path, width=Inches(6.0))
+                        graphs_embedded += 1
                     except Exception as e:
                         doc.add_paragraph(f"[Could not embed image: {e}]")
+                        logger.warning(f"[DocBuilder] Failed to embed image {img_path}: {e}")
                 else:
                     doc.add_paragraph(f"[Image not found: {img_path}]")
+                    graphs_missing += 1
             else:
                 _add_formatted_paragraph(doc, stripped)
 
@@ -416,7 +473,13 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
         i += 1
 
     doc.save(output_path)
-    print(f"  Word document saved to: {output_path}")
+    elapsed = time.time() - t0
+    logger.info(f"  Word document saved to: {output_path}")
+    logger.info(
+        f"  DocBuilder stats: {tables_added} tables, "
+        f"{graphs_embedded} graphs embedded, {graphs_missing} missing"
+        f" | built in {elapsed:.1f}s"
+    )
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -427,54 +490,70 @@ def main() -> None:
     archive_path = config.get("archive_file", "full_archive.txt")
     context_path = config.get("active_context_file", "active_context.md")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+    debug_logging = config.get("debug_logging", False)
 
     extracted_code_path = "extracted_code.md"
     report_md_path = "final_report.md"
     report_docx_path = "final_report.docx"
 
-    print("=" * 60)
-    print("Phase 2 — Final Report Generator")
-    print(f"Archive : {archive_path}")
-    print(f"Context : {context_path}")
-    print(f"Graphs  : {graphs_folder}")
-    print(f"Model   : {model}")
-    print("=" * 60)
-    print()
+    # ── Setup logging ─────────────────────────────────────────────────────────
+    log_file = setup_logging(debug=debug_logging)
+
+    logger.info("=" * 60)
+    logger.info("Phase 2 — Final Report Generator")
+    logger.info(f"Archive : {archive_path}")
+    logger.info(f"Context : {context_path}")
+    logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Model   : {model}")
+    logger.info(f"Log     : {log_file}")
+    logger.info("=" * 60)
+    logger.info("")
 
     # Validate inputs
     if not Path(archive_path).exists():
-        print(f"ERROR: {archive_path} not found. Run loop.py first.")
+        logger.error(f"ERROR: {archive_path} not found. Run loop.py first.")
         sys.exit(1)
 
     archive_text = read_file(archive_path)
     context_text = read_file(context_path) if Path(context_path).exists() else ""
+    logger.debug(
+        f"[Input] archive={len(archive_text):,}ch  context={len(context_text):,}ch"
+    )
 
     # Parse successful entries
+    t_parse = time.time()
     entries = parse_archive(archive_text)
-    print(f"Found {len(entries)} successful analyses in archive.")
+    logger.info(f"Found {len(entries)} successful analyses in archive (parsed in {time.time()-t_parse:.2f}s).")
 
     if not entries:
-        print("No successful analyses to report on. Exiting.")
+        logger.error("No successful analyses to report on. Exiting.")
         sys.exit(0)
 
     # ── Step A: Extract code ──────────────────────────────────────────────────
-    print(f"\n[Step A] Extracting analysis code to {extracted_code_path}...")
+    logger.info(f"\n[Step A] Extracting analysis code to {extracted_code_path}...")
+    t_a = time.time()
     extract_code_to_file(entries, extracted_code_path)
+    logger.info(f"[Step A] Done in {time.time()-t_a:.1f}s")
 
     # ── Step B: Generate markdown report (LLM) ────────────────────────────────
     available_graphs = list_available_graphs(graphs_folder)
-    print(f"\n[Step B] Generating markdown report (streaming)...")
-    print(f"         Available graphs: {len(available_graphs)}")
+    logger.info(f"\n[Step B] Generating markdown report (streaming)...")
+    logger.info(f"         Analyses: {len(entries)}  |  Available graphs: {len(available_graphs)}")
     if available_graphs:
         for _, fname in available_graphs:
-            print(f"           - {fname}")
-    print()
+            logger.info(f"           - {fname}")
+    logger.info("")
 
     user_message = build_report_prompt(entries, context_text, available_graphs)
+    logger.debug(
+        f"[Step B] Prompt size: {len(user_message):,}ch "
+        f"(system={len(PHASE2_SYSTEM_PROMPT):,}ch  user={len(user_message):,}ch)"
+    )
 
     client = anthropic.Anthropic(api_key=API_KEY)
-    print("-" * 60)
+    logger.info("-" * 60)
 
+    t_b = time.time()
     report_text = ""
     with client.messages.stream(
         model=model,
@@ -493,22 +572,30 @@ def main() -> None:
             report_text = block.text
             break
 
-    write_file(report_md_path, report_text)
+    b_elapsed = time.time() - t_b
     usage = response.usage
-    print(f"Markdown report saved to: {report_md_path}")
-    print(f"Tokens — input: {usage.input_tokens:,}  output: {usage.output_tokens:,}")
+    write_file(report_md_path, report_text)
+    logger.info(f"Markdown report saved to: {report_md_path} ({len(report_text):,}ch)")
+    logger.info(
+        f"[Step B] Done in {b_elapsed:.1f}s | "
+        f"tokens in={usage.input_tokens:,}  out={usage.output_tokens:,}  "
+        f"total={usage.input_tokens + usage.output_tokens:,}"
+    )
 
     # ── Step C: Build Word document ───────────────────────────────────────────
-    print(f"\n[Step C] Building Word document ({report_docx_path})...")
+    logger.info(f"\n[Step C] Building Word document ({report_docx_path})...")
+    t_c = time.time()
     build_word_document(report_text, graphs_folder, report_docx_path)
+    logger.info(f"[Step C] Done in {time.time()-t_c:.1f}s")
 
-    print()
-    print("=" * 60)
-    print("Phase 2 complete.")
-    print(f"  {extracted_code_path}  — all successful analysis code")
-    print(f"  {report_md_path}       — full markdown report")
-    print(f"  {report_docx_path}     — Word document with tables and graphs")
-    print("=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("Phase 2 complete.")
+    logger.info(f"  {extracted_code_path}  — all successful analysis code")
+    logger.info(f"  {report_md_path}       — full markdown report")
+    logger.info(f"  {report_docx_path}     — Word document with tables and graphs")
+    logger.info(f"  {log_file}  — full debug log")
+    logger.info("=" * 60)
 
 if __name__ == "__main__":
     main()

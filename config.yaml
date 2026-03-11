@@ -14,3 +14,4 @@ graphs_folder: workspace/graphs  # analyst saves PNG charts here; referenced (no
 max_code_retries: 2          # retry failed code this many times within the same iteration
 fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run
 summarize_on_start: false    # set to true to run Summarizer on active_context.md before the first iteration (useful when re-running without fresh_start)
+debug_logging: false         # set to true to enable DEBUG-level console output (file log always captures DEBUG)
