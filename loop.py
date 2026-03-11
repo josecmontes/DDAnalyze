@@ -12,6 +12,7 @@ Features:
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -31,6 +32,40 @@ API_KEY = os.getenv('API_KEY')
 
 # Change to the directory containing this script so relative paths work
 os.chdir(Path(__file__).parent)
+
+# ─── Logging Setup ────────────────────────────────────────────────────────────
+
+logger = logging.getLogger("ddanalyze.loop")
+
+def setup_logging(debug: bool = False, log_dir: str = "logs") -> Path:
+    """
+    Configure logging to console (INFO+) and a timestamped file (always DEBUG).
+    Returns the path of the created log file.
+    """
+    Path(log_dir).mkdir(exist_ok=True)
+    log_file = Path(log_dir) / f"loop_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+    console_level = logging.DEBUG if debug else logging.INFO
+
+    root = logging.getLogger("ddanalyze")
+    root.setLevel(logging.DEBUG)  # capture everything; handlers filter
+
+    # Console handler — clean format, respects debug flag
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(console_level)
+    ch.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    root.addHandler(ch)
+
+    # File handler — always DEBUG, full timestamp + level
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)-7s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(fh)
+
+    return log_file
 
 # ─── System Prompts ───────────────────────────────────────────────────────────
 
@@ -173,8 +208,18 @@ def call_llm(
     user: str,
     model: str,
     max_tokens: int,
-) -> str:
-    """Call Claude with streaming and return the full text response."""
+    tag: str = "LLM",
+) -> tuple[str, int, int]:
+    """
+    Call Claude with streaming and return (text, input_tokens, output_tokens).
+    Logs prompt sizes at DEBUG and timing + token usage at INFO.
+    """
+    logger.debug(
+        f"[{tag}] Sending request | system={len(system):,}ch "
+        f"user={len(user):,}ch max_tokens={max_tokens}"
+    )
+    t0 = time.time()
+
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
@@ -183,12 +228,21 @@ def call_llm(
     ) as stream:
         response = stream.get_final_message()
 
+    elapsed = time.time() - t0
+    in_tok = response.usage.input_tokens
+    out_tok = response.usage.output_tokens
+
+    logger.info(
+        f"  [{tag}] Done in {elapsed:.1f}s | tokens in={in_tok:,} out={out_tok:,}"
+    )
+
     for block in response.content:
         if block.type == "text":
-            return block.text
-    return ""
+            return block.text, in_tok, out_tok
+    return "", in_tok, out_tok
 
-def parse_json_response(text: str) -> Optional[dict]:
+
+def parse_json_response(text: str, tag: str = "JSON") -> Optional[dict]:
     """Robustly extract a JSON object from an LLM response."""
     text = text.strip()
 
@@ -196,25 +250,31 @@ def parse_json_response(text: str) -> Optional[dict]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass
+        logger.debug(f"[{tag}] Direct JSON parse failed — trying markdown fence extraction")
 
     # Attempt 2: extract from markdown code fence
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(1).strip())
+            result = json.loads(match.group(1).strip())
+            logger.debug(f"[{tag}] JSON extracted from markdown fence (attempt 2)")
+            return result
         except json.JSONDecodeError:
-            pass
+            logger.debug(f"[{tag}] Markdown fence extraction failed — trying brace search")
 
     # Attempt 3: find outermost { ... }
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(text[start : end + 1])
+            result = json.loads(text[start : end + 1])
+            logger.debug(f"[{tag}] JSON extracted via brace search (attempt 3)")
+            return result
         except json.JSONDecodeError:
             pass
 
+    preview = text[:300].replace("\n", " ")
+    logger.warning(f"[{tag}] All JSON parse attempts failed. Response preview: {preview!r}")
     return None
 
 # ─── Message Builders ─────────────────────────────────────────────────────────
@@ -445,8 +505,9 @@ def _extract_graph_saves(stdout: str, graphs_folder: str) -> list:
         graph_path = Path(graphs_folder) / filename
         if graph_path.exists():
             graphs.append((filename, description))
+            logger.debug(f"[Graphs] Recorded graph: {filename} — {description}")
         else:
-            print(f"  [Warning] Graph declared but file not found: {graph_path}")
+            logger.warning(f"[Graphs] Graph declared but file not found: {graph_path}")
     return graphs
 
 def update_active_context_success(
@@ -457,6 +518,7 @@ def update_active_context_success(
     graph_refs: list,
 ) -> None:
     content = read_file(path)
+    size_before = len(content)
     now = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Add row to Analysis Index table
@@ -500,11 +562,17 @@ def update_active_context_success(
         content = _append_to_graphs_table(content, new_graph_row)
 
     write_file(path, content)
+    size_after = len(content)
+    logger.debug(
+        f"[Context] Updated (success): {size_before:,}ch → {size_after:,}ch "
+        f"(+{size_after - size_before:,}ch)"
+    )
 
 def update_active_context_failure(
     path: str, iteration: int, parsed: dict, evaluation: dict
 ) -> None:
     content = read_file(path)
+    size_before = len(content)
     now = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Add FAILED row to Analysis Index
@@ -529,6 +597,11 @@ def update_active_context_failure(
         )
 
     write_file(path, content)
+    size_after = len(content)
+    logger.debug(
+        f"[Context] Updated (failure): {size_before:,}ch → {size_after:,}ch "
+        f"(+{size_after - size_before:,}ch)"
+    )
 
 # ─── Archive Utilities ────────────────────────────────────────────────────────
 
@@ -609,6 +682,7 @@ def _format_archive_entry(
 
 def run_code(script_path: str, timeout: int = 120) -> tuple:
     """Execute a Python script; return (stdout, stderr)."""
+    t0 = time.time()
     try:
         result = subprocess.run(
             [sys.executable, script_path],
@@ -616,10 +690,20 @@ def run_code(script_path: str, timeout: int = 120) -> tuple:
             text=True,
             timeout=timeout,
         )
+        elapsed = time.time() - t0
+        stdout_lines = result.stdout.count("\n")
+        logger.debug(
+            f"[Runner] Exited code={result.returncode} in {elapsed:.1f}s "
+            f"| stdout={len(result.stdout):,}ch ({stdout_lines} lines) "
+            f"stderr={len(result.stderr):,}ch"
+        )
         return result.stdout, result.stderr
     except subprocess.TimeoutExpired:
+        elapsed = time.time() - t0
+        logger.warning(f"[Runner] Script timed out after {elapsed:.0f}s (limit={timeout}s)")
         return "", "TIMEOUT: Script exceeded 120 seconds"
     except Exception as e:
+        logger.error(f"[Runner] Unexpected execution error: {e}")
         return "", f"EXECUTION_ERROR: {e}"
 
 # ─── Initialisation Helpers ───────────────────────────────────────────────────
@@ -640,7 +724,7 @@ def _extract_goal_from_task(task_content: str) -> str:
 def _init_active_context(path: str, task_content: str) -> None:
     goal = _extract_goal_from_task(task_content)
     write_file(path, ACTIVE_CONTEXT_TEMPLATE.format(goal=goal))
-    print(f"  [Init] Created {path} from template")
+    logger.info(f"  [Init] Created {path} from template")
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
@@ -658,13 +742,17 @@ def main() -> None:
     summarizer_every = config.get("summarizer_every_n", 10)
     max_code_retries = config.get("max_code_retries", 2)
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+    debug_logging = config.get("debug_logging", False)
+
+    # ── Setup logging ─────────────────────────────────────────────────────────
+    log_file = setup_logging(debug=debug_logging)
 
     task_content = read_file(task_path)
     client = anthropic.Anthropic(api_key=API_KEY)
 
     # ── fresh_start ──────────────────────────────────────────────────────────
     if config.get("fresh_start", False):
-        print("[fresh_start] Resetting active_context.md and full_archive.txt")
+        logger.info("[fresh_start] Resetting active_context.md and full_archive.txt")
         _init_active_context(context_path, task_content)
         write_file(archive_path, "")
     else:
@@ -677,48 +765,81 @@ def main() -> None:
     Path("workspace").mkdir(exist_ok=True)
     Path(graphs_folder).mkdir(parents=True, exist_ok=True)
 
+    # ── summarize_on_start ────────────────────────────────────────────────────
+    if config.get("summarize_on_start", False) and not config.get("fresh_start", False):
+        print("[summarize_on_start] Compressing active_context.md before first iteration...")
+        current_ctx = read_file(context_path)
+        summarizer_msg = f"Current iteration: 0 of {n_iterations} total.\n\n" + current_ctx
+        new_ctx = call_llm(client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens)
+        write_file(context_path, new_ctx)
+        print("[summarize_on_start] active_context.md compressed")
+
     # ── Banner ───────────────────────────────────────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("AUTONOMOUS DATA ANALYSIS LOOP")
-    print(f"Model  : {model}")
-    print(f"Runs   : {n_iterations}  |  Mode: {config['repetition_mode']}")
-    print(f"Interval: {config['interval_minutes']} min  |  Summarizer every {summarizer_every} iters")
-    print(f"Retries : up to {max_code_retries} per iteration")
-    print(f"Graphs  : {graphs_folder}")
-    print(f"{'=' * 60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("AUTONOMOUS DATA ANALYSIS LOOP")
+    logger.info(f"Model  : {model}")
+    logger.info(f"Runs   : {n_iterations}  |  Mode: {config['repetition_mode']}")
+    logger.info(f"Interval: {config['interval_minutes']} min  |  Summarizer every {summarizer_every} iters")
+    logger.info(f"Retries : up to {max_code_retries} per iteration")
+    logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Log     : {log_file}")
+    logger.info(f"Debug   : {'ON' if debug_logging else 'OFF (set debug_logging: true in config.yaml)'}")
+    logger.info(f"{'=' * 60}")
+
+    # Log full config at DEBUG level
+    logger.debug(f"[Config] Full settings: {json.dumps(config, indent=2)}")
+
+    # ── Token tracking ───────────────────────────────────────────────────────
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     # ── Iteration loop ────────────────────────────────────────────────────────
     for iteration in range(1, n_iterations + 1):
-        print(f"\n=== ITERATION {iteration} / {n_iterations} ===")
+        iter_start = time.time()
+        logger.info(f"\n=== ITERATION {iteration} / {n_iterations} ===")
 
         try:
             # ── Step 1: Read context ──────────────────────────────────────────
             context = read_file(context_path)
+            context_size = len(context)
+            logger.debug(f"[Context] Loaded {context_path}: {context_size:,}ch")
 
             # ── Step 2: Call Analyst ──────────────────────────────────────────
-            print("  [Analyst] Planning analysis...")
+            logger.info("  [Analyst] Planning analysis...")
             analyst_msg = build_analyst_user_message(task_content, context, iteration, config)
-            raw_analyst = call_llm(client, ANALYST_SYSTEM_PROMPT, analyst_msg, model, max_tokens)
-            parsed = parse_json_response(raw_analyst)
+            raw_analyst, in_tok, out_tok = call_llm(
+                client, ANALYST_SYSTEM_PROMPT, analyst_msg, model, max_tokens, tag="Analyst"
+            )
+            total_input_tokens += in_tok
+            total_output_tokens += out_tok
+
+            parsed = parse_json_response(raw_analyst, tag="Analyst")
 
             if parsed is None:
-                print("  [ERROR] Analyst returned invalid JSON — skipping iteration")
+                logger.error("  [ERROR] Analyst returned invalid JSON — skipping iteration")
+                logger.debug(f"[Analyst] Raw response (first 500ch): {raw_analyst[:500]!r}")
                 entry = _format_archive_entry(
                     iteration, None, raw_analyst, "", None, "JSON_PARSE_ERROR"
                 )
                 append_file(archive_path, entry)
                 continue
 
-            print(f"  [Analyst] Type : {parsed.get('analysis_type', 'unknown')}")
-            print(f"  [Analyst] Hypo : {parsed.get('hypothesis', '')[:120]}")
+            analysis_type = parsed.get("analysis_type", "unknown")
+            hypothesis = parsed.get("hypothesis", "")
+            columns_used = parsed.get("columns_used", [])
+            logger.info(f"  [Analyst] Type : {analysis_type}")
+            logger.info(f"  [Analyst] Hypo : {hypothesis[:120]}")
+            logger.debug(f"  [Analyst] Columns: {columns_used}")
+            logger.debug(f"  [Analyst] Full hypothesis: {hypothesis}")
+            logger.debug(f"  [Analyst] Code length: {len(parsed.get('code', '')):,}ch")
 
             # ── Step 3: Write and run code (with retry on error) ──────────────
             write_file(script_path, parsed.get("code", ""))
-            print(f"  [Runner] Executing {script_path}...")
+            logger.info(f"  [Runner] Executing {script_path}...")
             stdout, stderr = run_code(script_path)
 
             if "TIMEOUT" in stderr:
-                print("  [ERROR] Script timed out")
+                logger.error("  [ERROR] Script timed out")
                 entry = _format_archive_entry(
                     iteration, parsed, stdout, stderr, None, "TIMEOUT"
                 )
@@ -729,50 +850,76 @@ def main() -> None:
             retry_count = 0
             while stderr and retry_count < max_code_retries:
                 retry_count += 1
-                print(
+                # Log first line of stderr so it's visible without debug mode
+                stderr_first_line = stderr.strip().split("\n")[-1][:120]
+                logger.info(
                     f"  [Retry {retry_count}/{max_code_retries}] "
                     f"Code errored — asking Analyst to fix..."
                 )
+                logger.info(f"  [Retry {retry_count}/{max_code_retries}] Error: {stderr_first_line}")
+                logger.debug(f"  [Retry {retry_count}] Full stderr:\n{stderr}")
+                logger.debug(f"  [Retry {retry_count}] stdout before error:\n{stdout[:500]}")
+
                 retry_msg = build_retry_analyst_message(
                     task_content, context, iteration, config,
                     parsed, stdout, stderr, retry_count,
                 )
-                raw_retry = call_llm(client, ANALYST_SYSTEM_PROMPT, retry_msg, model, max_tokens)
-                parsed_retry = parse_json_response(raw_retry)
+                raw_retry, in_tok, out_tok = call_llm(
+                    client, ANALYST_SYSTEM_PROMPT, retry_msg, model, max_tokens,
+                    tag=f"Retry{retry_count}",
+                )
+                total_input_tokens += in_tok
+                total_output_tokens += out_tok
+
+                parsed_retry = parse_json_response(raw_retry, tag=f"Retry{retry_count}")
 
                 if parsed_retry is None:
-                    print(f"  [Retry {retry_count}] Analyst returned invalid JSON — stopping retries")
+                    logger.warning(
+                        f"  [Retry {retry_count}] Analyst returned invalid JSON — stopping retries"
+                    )
                     break
 
                 parsed = parsed_retry
                 write_file(script_path, parsed.get("code", ""))
-                print(f"  [Retry {retry_count}] Re-executing fixed code...")
+                logger.info(f"  [Retry {retry_count}] Re-executing fixed code...")
                 stdout, stderr = run_code(script_path)
 
                 if "TIMEOUT" in stderr:
-                    print(f"  [Retry {retry_count}] Timed out after fix — stopping retries")
+                    logger.warning(f"  [Retry {retry_count}] Timed out after fix — stopping retries")
                     break
 
                 if not stderr:
-                    print(f"  [Retry {retry_count}] Code fixed and ran successfully!")
+                    logger.info(f"  [Retry {retry_count}] Code fixed and ran successfully!")
 
+            # Log full output at debug, short preview at info
             preview = (stdout or stderr or "(no output)")[:200].replace("\n", " ")
-            print(f"  [Runner] Output : {preview}")
+            logger.info(f"  [Runner] Output : {preview}")
+            logger.debug(f"  [Runner] Full stdout ({len(stdout):,}ch):\n{stdout}")
+            if stderr:
+                logger.debug(f"  [Runner] Full stderr ({len(stderr):,}ch):\n{stderr}")
 
             # ── Step 4: Detect saved graphs ───────────────────────────────────
             graph_refs = _extract_graph_saves(stdout, graphs_folder)
             if graph_refs:
-                print(f"  [Graphs] {len(graph_refs)} graph(s) saved: "
-                      f"{', '.join(fn for fn, _ in graph_refs)}")
+                logger.info(
+                    f"  [Graphs] {len(graph_refs)} graph(s) saved: "
+                    f"{', '.join(fn for fn, _ in graph_refs)}"
+                )
 
             # ── Step 5: Call Critic ───────────────────────────────────────────
-            print("  [Critic] Evaluating...")
+            logger.info("  [Critic] Evaluating...")
             critic_msg = build_critic_user_message(parsed, stdout, stderr, iteration)
-            raw_critic = call_llm(client, CRITIC_SYSTEM_PROMPT, critic_msg, model, max_tokens)
-            evaluation = parse_json_response(raw_critic)
+            raw_critic, in_tok, out_tok = call_llm(
+                client, CRITIC_SYSTEM_PROMPT, critic_msg, model, max_tokens, tag="Critic"
+            )
+            total_input_tokens += in_tok
+            total_output_tokens += out_tok
+
+            evaluation = parse_json_response(raw_critic, tag="Critic")
 
             if evaluation is None:
-                print("  [ERROR] Critic returned invalid JSON — logging and continuing")
+                logger.error("  [ERROR] Critic returned invalid JSON — logging and continuing")
+                logger.debug(f"[Critic] Raw response (first 500ch): {raw_critic[:500]!r}")
                 entry = _format_archive_entry(
                     iteration, parsed, stdout, stderr, None, "CRITIC_JSON_PARSE_ERROR"
                 )
@@ -782,15 +929,19 @@ def main() -> None:
             status = evaluation.get("status", "unknown")
             quality = evaluation.get("quality", "") if status == "success" else ""
             dead_ends_count = len(evaluation.get("dead_ends", []))
-            print(
+            logger.info(
                 f"  [Critic] Status : {status}"
                 + (f" | Quality: {quality}" if quality else "")
                 + (f" | Dead ends confirmed: {dead_ends_count}" if dead_ends_count else "")
             )
+            logger.debug(f"  [Critic] Summary: {evaluation.get('summary', '')[:300]}")
+            logger.debug(f"  [Critic] Key findings: {evaluation.get('key_findings', [])}")
+            logger.debug(f"  [Critic] Suggested followup: {evaluation.get('suggested_followup', '')}")
 
             # ── Step 6: Write to archive (always) ─────────────────────────────
             entry = _format_archive_entry(iteration, parsed, stdout, stderr, evaluation)
             append_file(archive_path, entry)
+            logger.debug(f"  [Archive] Appended {len(entry):,}ch to {archive_path}")
 
             # ── Step 7: Update active_context ─────────────────────────────────
             if status == "success":
@@ -798,50 +949,69 @@ def main() -> None:
                     context_path, iteration, parsed, evaluation, graph_refs
                 )
                 n_findings = len(evaluation.get("key_findings", []))
-                print(f"  [Context] Added {n_findings} finding(s), {len(graph_refs)} graph(s)")
+                logger.info(f"  [Context] Added {n_findings} finding(s), {len(graph_refs)} graph(s)")
             else:
                 update_active_context_failure(context_path, iteration, parsed, evaluation)
-                print(f"  [Context] Logged failure: {evaluation.get('error_type', 'unknown')}")
+                logger.info(f"  [Context] Logged failure: {evaluation.get('error_type', 'unknown')}")
 
             # ── Step 8: Run Summarizer ────────────────────────────────────────
             if iteration % summarizer_every == 0 and iteration < n_iterations:
-                print("  [Summarizer] Compressing active_context.md...")
-                current_ctx = read_file(context_path)
+                ctx_before = read_file(context_path)
+                logger.info("  [Summarizer] Compressing active_context.md...")
+                logger.debug(f"  [Summarizer] Context size before: {len(ctx_before):,}ch")
                 summarizer_msg = (
                     f"Current iteration: {iteration} of {n_iterations} total.\n\n"
-                    + current_ctx
+                    + ctx_before
                 )
-                new_ctx = call_llm(
-                    client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens
+                new_ctx, in_tok, out_tok = call_llm(
+                    client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens,
+                    tag="Summarizer",
                 )
+                total_input_tokens += in_tok
+                total_output_tokens += out_tok
+
                 write_file(context_path, new_ctx)
-                print("  [Summarizer] active_context.md compressed")
+                logger.info(
+                    f"  [Summarizer] Compressed: {len(ctx_before):,}ch → {len(new_ctx):,}ch"
+                )
 
         except KeyboardInterrupt:
-            print("\n[Interrupted] Exiting loop cleanly.")
+            logger.info("\n[Interrupted] Exiting loop cleanly.")
             break
         except Exception as exc:
-            print(f"  [FATAL ERROR] Iteration {iteration}: {exc}")
+            logger.error(f"  [FATAL ERROR] Iteration {iteration}: {exc}", exc_info=True)
             error_entry = _format_archive_entry(
                 iteration, None, str(exc), "", None, "FATAL_ERROR"
             )
             append_file(archive_path, error_entry)
 
+        # ── Iteration summary ─────────────────────────────────────────────────
+        iter_elapsed = time.time() - iter_start
+        logger.info(
+            f"  [Iter {iteration}] Done in {iter_elapsed:.0f}s | "
+            f"cumulative tokens in={total_input_tokens:,} out={total_output_tokens:,}"
+        )
+
         # ── Step 9: Wait between iterations ──────────────────────────────────
         if iteration < n_iterations:
             wait_sec = config["interval_minutes"] * 60
             if wait_sec > 0:
-                print(f"  [Wait] Sleeping {config['interval_minutes']} minute(s)...")
+                logger.info(f"  [Wait] Sleeping {config['interval_minutes']} minute(s)...")
                 time.sleep(wait_sec)
 
     # ── Done ─────────────────────────────────────────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("LOOP COMPLETE")
-    print(f"Archive : {archive_path}")
-    print(f"Context : {context_path}")
-    print(f"Graphs  : {graphs_folder}")
-    print("Run phase2.py to generate the final report.")
-    print(f"{'=' * 60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("LOOP COMPLETE")
+    logger.info(f"Archive : {archive_path}")
+    logger.info(f"Context : {context_path}")
+    logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Log     : {log_file}")
+    logger.info(
+        f"Total tokens — input: {total_input_tokens:,}  output: {total_output_tokens:,}  "
+        f"total: {total_input_tokens + total_output_tokens:,}"
+    )
+    logger.info("Run phase2.py to generate the final report.")
+    logger.info(f"{'=' * 60}")
 
 if __name__ == "__main__":
     main()
