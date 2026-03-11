@@ -10,4 +10,6 @@ task_file: task.md
 active_context_file: active_context.md
 archive_file: full_archive.txt
 workspace_script: workspace/current_analysis.py
+graphs_folder: workspace/graphs  # analyst saves PNG charts here; referenced (not read) in context
+max_code_retries: 2          # retry failed code this many times within the same iteration
 fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run
