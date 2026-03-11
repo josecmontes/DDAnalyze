@@ -155,16 +155,29 @@ Extended palette (use for additional series or when more contrast is needed):
   #00ABAB  (Aqua Blue)
 
 Apply consistently:
+- Font: Arial throughout. Set globally at the top of every chart script:
+    import matplotlib as mpl
+    mpl.rcParams['font.family'] = 'Arial'
+  Fall back to 'DejaVu Sans' if Arial is unavailable.
 - Bar charts: cycle through the primary palette per category/series.
 - Line charts: each line gets its own palette color; use markers for clarity.
 - Background: white (#FFFFFF). Grid: light gray (#EEEEEE), alpha=0.6.
-- Title: #012169 (Dark Navy), bold, fontsize 13.
-- Axis labels: #4A4A4A, fontsize 10.
-- Tick labels: #4A4A4A, fontsize 9.
-- Legend: frameon=False or subtle frame.
+- Title: #86BC25 (Deloitte Green), bold, fontsize 13, Arial.
+- Axis labels: #4A4A4A, fontsize 10, Arial.
+- Tick labels: #4A4A4A, fontsize 9, Arial.
+- Legend: frameon=False or subtle frame, Arial fontsize 9.
 - Spine: remove top and right spines (ax.spines['top'].set_visible(False), same for 'right').
 - For single-series bar charts use #86BC25 (green) uniformly.
-- Avoid red/orange/yellow unless explicitly needed for warning indicators."""
+- Avoid red/orange/yellow unless explicitly needed for warning indicators.
+
+PRINTED TABLES:
+- Column headings must use Deloitte Green background (#86BC25) with white bold text.
+- Use ANSI codes for terminal tables:
+    GREEN_HDR = "\033[1;97;42m"  # bold white on green
+    RESET = "\033[0m"
+    header = " | ".join(f"{GREEN_HDR} {col} {RESET}" for col in columns)
+- For matplotlib image tables: set header cell facecolor="#86BC25", text color="white",
+  fontweight="bold" via cell properties. All other cells: white background, #4A4A4A text, Arial."""
 
 CRITIC_SYSTEM_PROMPT = """You are the Critic agent in an autonomous data analysis loop. Your job is to evaluate \
 whether a data analysis run produced useful business insight.
