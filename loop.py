@@ -677,6 +677,15 @@ def main() -> None:
     Path("workspace").mkdir(exist_ok=True)
     Path(graphs_folder).mkdir(parents=True, exist_ok=True)
 
+    # ── summarize_on_start ────────────────────────────────────────────────────
+    if config.get("summarize_on_start", False) and not config.get("fresh_start", False):
+        print("[summarize_on_start] Compressing active_context.md before first iteration...")
+        current_ctx = read_file(context_path)
+        summarizer_msg = f"Current iteration: 0 of {n_iterations} total.\n\n" + current_ctx
+        new_ctx = call_llm(client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model, max_tokens)
+        write_file(context_path, new_ctx)
+        print("[summarize_on_start] active_context.md compressed")
+
     # ── Banner ───────────────────────────────────────────────────────────────
     print(f"\n{'=' * 60}")
     print("AUTONOMOUS DATA ANALYSIS LOOP")
