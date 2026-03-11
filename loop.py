@@ -147,6 +147,13 @@ Primary palette (use in this order for series/bars/lines):
   #012169  (Dark Navy)
   #BBBCBC  (Light Gray — neutral / reference lines)
 
+Extended palette (use for additional series or when more contrast is needed):
+  #26890D  (Medium Green)
+  #046A38  (Dark Green)
+  #404040  (Grey)
+  #0D8390  (Electric Blue)
+  #00ABAB  (Aqua Blue)
+
 Apply consistently:
 - Bar charts: cycle through the primary palette per category/series.
 - Line charts: each line gets its own palette color; use markers for clarity.
