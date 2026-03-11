@@ -85,9 +85,10 @@ Your job:
        | LTM    | $X       | X         | +X%    |
        | CAGR   |          |           | XX%    |
    - A 3–5 sentence explanation of what was found and why it matters for the business.
-   - If a graph was generated for this analysis, reference it with EXACTLY this syntax:
+   - You MUST embed ALL graphs from the Available Graphs list using EXACTLY this syntax:
        [GRAPH: filename.png]
-     (use the filename from the Available Graphs list)
+     Place each graph in the section most relevant to its content.
+     Do not omit any graph — every file in the list must appear in the report.
 
 3. Organize findings into logical sections (e.g. Revenue Trends, Customer Analysis,
    Concentration & Risk, Seasonality & Timing, Geographic / Segment Breakdown).
@@ -239,6 +240,29 @@ def list_available_graphs(graphs_folder: str) -> list:
         return []
     return [(str(p), p.name) for p in sorted(folder.glob("*.png"))]
 
+def _build_graph_descriptions(entries: list) -> dict:
+    """
+    Scan archive entry outputs for GRAPH_SAVED lines and return
+    a dict mapping filename → description.
+    """
+    desc: dict = {}
+    for e in entries:
+        for line in e.get("output", "").splitlines():
+            line = line.strip()
+            if not line.startswith("GRAPH_SAVED:"):
+                continue
+            rest = line[len("GRAPH_SAVED:"):].strip()
+            if " — " in rest:
+                fname, description = rest.split(" — ", 1)
+            elif " - " in rest:
+                fname, description = rest.split(" - ", 1)
+            else:
+                fname, description = rest, ""
+            fname = Path(fname.strip()).name
+            if fname and fname not in desc:
+                desc[fname] = description.strip()
+    return desc
+
 def build_report_prompt(entries: list, context_text: str, available_graphs: list) -> str:
     parts = []
     for e in entries:
@@ -259,11 +283,19 @@ Evaluation:
 
     graphs_section = ""
     if available_graphs:
+        graph_desc = _build_graph_descriptions(entries)
         graphs_section = "\n\n## Available Graphs\n"
-        graphs_section += "The following graph files were saved during the analysis loop.\n"
-        graphs_section += "Reference them in the report using [GRAPH: filename.png] syntax.\n\n"
+        graphs_section += (
+            "The following graph files exist in the graphs folder. "
+            "You MUST reference ALL of them in the report using [GRAPH: filename.png] syntax — "
+            "place each graph immediately after the section that most closely matches its content.\n\n"
+        )
         for filepath, filename in available_graphs:
-            graphs_section += f"- {filename}\n"
+            description = graph_desc.get(filename, "")
+            if description:
+                graphs_section += f"- {filename} — {description}\n"
+            else:
+                graphs_section += f"- {filename}\n"
 
     return f"""## Final State of the Knowledge Base
 
@@ -537,11 +569,13 @@ def main() -> None:
 
     # ── Step B: Generate markdown report (LLM) ────────────────────────────────
     available_graphs = list_available_graphs(graphs_folder)
+    graph_descs = _build_graph_descriptions(entries)
     logger.info(f"\n[Step B] Generating markdown report (streaming)...")
     logger.info(f"         Analyses: {len(entries)}  |  Available graphs: {len(available_graphs)}")
     if available_graphs:
         for _, fname in available_graphs:
-            logger.info(f"           - {fname}")
+            desc = graph_descs.get(fname, "(no description in archive)")
+            logger.info(f"           - {fname}  |  {desc}")
     logger.info("")
 
     user_message = build_report_prompt(entries, context_text, available_graphs)
