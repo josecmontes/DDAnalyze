@@ -293,9 +293,32 @@ def _is_separator_row(line: str) -> bool:
     """Return True if the line is a markdown table separator (|---|---|)."""
     return bool(re.match(r"^\|[\s\-:|]+\|$", line.strip()))
 
+def _set_cell_shading(cell, hex_color: str) -> None:
+    """Apply a solid background fill to a table cell using direct XML manipulation."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color.lstrip("#"))
+    tcPr.append(shd)
+
+
 def _add_markdown_table_to_doc(doc, header_line: str, data_lines: list) -> None:
-    """Convert parsed markdown table lines into a python-docx Word table."""
-    from docx.shared import Pt
+    """Convert parsed markdown table lines into a python-docx Word table.
+
+    Header row: Deloitte dark-green (#046A38) background, white bold Arial text.
+    Body rows: Arial text, normal weight.
+    """
+    from docx.shared import Pt, RGBColor
+
+    # Deloitte table header colours
+    HEADER_BG  = "046A38"   # dark green (no leading #)
+    HEADER_FG  = RGBColor(0xFF, 0xFF, 0xFF)   # white
+    BODY_FONT  = "Arial"
 
     header_cells = _parse_table_row(header_line)
     if not header_cells:
@@ -306,7 +329,6 @@ def _add_markdown_table_to_doc(doc, header_line: str, data_lines: list) -> None:
     for line in data_lines:
         row = _parse_table_row(line)
         if row:
-            # Pad or trim to match column count
             while len(row) < n_cols:
                 row.append("")
             data_rows.append(row[:n_cols])
@@ -319,20 +341,26 @@ def _add_markdown_table_to_doc(doc, header_line: str, data_lines: list) -> None:
     try:
         table.style = "Table Grid"
     except Exception:
-        pass  # style may not exist in default template
+        pass
 
     for row_idx, row_data in enumerate(all_rows):
         for col_idx, cell_text in enumerate(row_data):
-            if col_idx < n_cols:
-                cell = table.rows[row_idx].cells[col_idx]
-                cell.text = cell_text
-                if row_idx == 0:  # Bold the header row
-                    for para in cell.paragraphs:
-                        for run in para.runs:
-                            run.bold = True
-                        para.runs[0].font.size = Pt(10) if para.runs else None
+            if col_idx >= n_cols:
+                continue
+            cell = table.rows[row_idx].cells[col_idx]
+            cell.text = ""  # clear before adding a styled run
 
-    # Add a blank paragraph after the table for spacing
+            para = cell.paragraphs[0]
+            run = para.add_run(cell_text)
+            run.font.name = BODY_FONT
+            run.font.size = Pt(10)
+
+            if row_idx == 0:
+                # Header: dark-green background, white bold text
+                _set_cell_shading(cell, HEADER_BG)
+                run.bold = True
+                run.font.color.rgb = HEADER_FG
+
     doc.add_paragraph()
 
 def _add_formatted_paragraph(doc, text: str):
@@ -350,13 +378,21 @@ def _add_formatted_paragraph(doc, text: str):
         else:
             para.add_run(part)
 
+def _add_deloitte_heading(doc, text: str, level: int, title_rgb, font: str) -> None:
+    """Add a Word heading styled with the Deloitte green color and Arial font."""
+    para = doc.add_heading(text, level=level)
+    for run in para.runs:
+        run.font.color.rgb = title_rgb
+        run.font.name = font
+
+
 def build_word_document(report_md: str, graphs_folder: str, output_path: str) -> None:
     """
     Convert a markdown report to a Word .docx file.
 
     Handles:
-      - # / ## / ### headings → Word heading styles
-      - | markdown tables | → Word tables (Table Grid style)
+      - # / ## / ### headings → Word heading styles (Deloitte green, Arial)
+      - | markdown tables | → Word tables (dark-green header, white font, Arial)
       - [GRAPH: filename.png] references → embedded PNG images
       - ![alt](path) markdown images → embedded images
       - **bold** text in paragraphs
@@ -386,6 +422,17 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
         section.top_margin = Inches(1.0)
         section.bottom_margin = Inches(1.0)
 
+    # ── Deloitte theme: set document-level default font to Arial ─────────────
+    from docx.shared import RGBColor
+    _DELOITTE_TITLE_RGB = RGBColor(0x26, 0x89, 0x0D)   # #26890D green medium
+    _ARIAL = "Arial"
+    try:
+        normal_style = doc.styles["Normal"]
+        normal_style.font.name = _ARIAL
+        normal_style.font.size = Pt(10)
+    except Exception:
+        pass
+
     lines = report_md.split("\n")
     i = 0
 
@@ -395,11 +442,14 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
 
         # ── Headers ──────────────────────────────────────────────────────────
         if stripped.startswith("### "):
-            doc.add_heading(stripped[4:], level=3)
+            _add_deloitte_heading(doc, stripped[4:], level=3,
+                                  title_rgb=_DELOITTE_TITLE_RGB, font=_ARIAL)
         elif stripped.startswith("## "):
-            doc.add_heading(stripped[3:], level=2)
+            _add_deloitte_heading(doc, stripped[3:], level=2,
+                                  title_rgb=_DELOITTE_TITLE_RGB, font=_ARIAL)
         elif stripped.startswith("# "):
-            doc.add_heading(stripped[2:], level=1)
+            _add_deloitte_heading(doc, stripped[2:], level=1,
+                                  title_rgb=_DELOITTE_TITLE_RGB, font=_ARIAL)
 
         # ── Markdown tables ───────────────────────────────────────────────────
         elif stripped.startswith("|") and i + 1 < len(lines) and _is_separator_row(lines[i + 1]):
