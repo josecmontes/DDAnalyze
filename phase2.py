@@ -92,8 +92,11 @@ Your job:
 3. Organize findings into logical sections (e.g. Revenue Trends, Customer Analysis,
    Concentration & Risk, Seasonality & Timing, Geographic / Segment Breakdown).
 
-4. End with a one-page Executive Summary: the 5–7 most important things to know about
-   this business from the data. Use clear bullet points.
+4. Begin with a one-page Executive Summary: the 5–7 most important things to know about
+   this business from the data. Use clear bullet points. Each bullet must cross-reference
+   the relevant section number and title where the supporting analysis is found, using the
+   format "(see Section N: Title)". The Executive Summary must be the FIRST section of the
+   report, immediately after the title, so that readers get the key takeaways up front.
 
 5. TONE — Write in a formal, senior consulting register throughout. Avoid conversational,
    didactic, or explanatory phrases (e.g. "This is exactly how wholesale ordering works:",
@@ -109,6 +112,45 @@ Your job:
    "True Rising — the brand's highest-revenue running model — posted..." or
    "the TRIBE line (lifestyle and fashion-oriented footwear)". Do not assume the reader
    knows internal product names or segment definitions.
+
+7. CURRENCY FORMAT — MANDATORY:
+   All monetary values MUST use the euro symbol prefix with lowercase magnitude suffix.
+   Correct format: ~€0.57m, €16.7m, €32.8m, €62.5m, €1.2k, €3.4bn
+   WRONG formats (never use these): "EUR 0.57M", "EUR ~0.57M", "EUR 16.7M", "0.57M EUR"
+   Rules:
+   - Always use the € symbol, never the word "EUR" before amounts.
+   - Use lowercase magnitude suffixes: k (thousands), m (millions), bn (billions).
+   - Place the ~ (approximate) symbol BEFORE the € sign when needed: ~€0.57m
+   - In tables, be consistent: all cells in the same column must use the same format.
+
+8. BASIS OF PREPARATION — For every major finding or analytical section, the report MUST
+   begin with a brief "Basis of Preparation" paragraph that explains HOW the analysis was
+   performed BEFORE presenting any results. This paragraph should cover:
+   - What data was used (which columns, what time period, any filters applied)
+   - How categories or cohorts were defined (e.g., "Models were classified as 'New Entrant'
+     if they had zero revenue in the prior 12-month window, 'Stable' if present in both
+     periods with less than 30% decline, and 'Bust' if revenue fell by more than 50%
+     from peak.")
+   - What methodology was applied (e.g., rolling windows, cohort analysis, concentration
+     indices, retention calculations)
+   - Any assumptions or limitations
+   The reader should never encounter a category, cohort, or metric without first understanding
+   how it was constructed. This is critical for transparency and reproducibility.
+
+9. VERBOSITY AND DEPTH — Be thorough and expansive in your narrative. For each finding:
+   - Explain the analytical approach before presenting results
+   - Provide rich context and interpretation, not just raw numbers
+   - Draw explicit connections between related findings across sections
+   - Quantify impacts in absolute and relative terms
+   - Discuss implications for the business
+   A section should typically be 400-800 words of prose (excluding tables), not 100-200.
+
+10. GLOSSARY — At the end of the report, include a ## Glossary section that defines every
+    abbreviation, acronym, internal term, analytical category, and technical metric used
+    in the report. Examples: LTM, CAGR, FY, ASP, HHI, NE (New Entrant), WS (Wholesale),
+    cohort names (Bust, Stable, Durable, Transient), product line names (CITY, TRIBE,
+    DISTRICT), and any other domain-specific terminology. Each entry should have a concise
+    but complete definition.
 
 Write for a senior business audience. Avoid statistical jargon. Assume readers are familiar
 with industry concepts but not with this company's internal product names or segment labels.
@@ -132,10 +174,19 @@ The JSON schema:
       "description": "string — 1-2 sentence scope of this section",
       "iterations": [int, ...],   // which analysis iteration numbers belong here
       "graphs": ["filename.png", ...],  // which graphs to embed in this section
-      "guidance": "string — writing instructions for the section author"
+      "guidance": "string — writing instructions for the section author. MUST instruct the \
+writer to open each sub-section with a Basis of Preparation paragraph explaining how the \
+analysis was performed, how categories/cohorts were defined, and what methodology was used, \
+BEFORE presenting any results. Also instruct the writer to be verbose and thorough (300-600 \
+words per sub-section) and to use €-prefixed lowercase format for all monetary values \
+(e.g. €16.7m, not EUR 16.7M)."
     }
   ],
-  "executive_summary_guidance": "string — key points the exec summary must cover"
+  "executive_summary_guidance": "string — key points the exec summary must cover. Each bullet \
+must cross-reference the section number and title where the supporting analysis is found. \
+All monetary values must use € prefix with lowercase suffix (e.g. €16.7m).",
+  "glossary_terms": ["list of all abbreviations, acronyms, internal terms, cohort names, \
+and technical metrics used across analyses that should be defined in the glossary"]
 }
 
 Rules:
@@ -144,11 +195,15 @@ Rules:
 then customer/channel, then risk/concentration, then any remaining themes.
 3. Aim for 4-8 sections. Merge small related analyses; split large heterogeneous ones.
 4. In "guidance", specify what tables to include (year-by-year, top-N, etc.), what narrative \
-angle to take, and what comparisons to draw.
+angle to take, and what comparisons to draw. ALWAYS include instructions for a Basis of \
+Preparation paragraph and for verbose, thorough writing.
 5. Map graphs to sections based on their filenames and the analyses that generated them.
 6. The executive_summary_guidance should list the 5-7 most important business takeaways \
-the summary must cover.
-7. Output ONLY the JSON object. No extra text before or after."""
+the summary must cover, with section cross-references.
+7. The glossary_terms list should include every abbreviation (LTM, CAGR, FY, ASP, HHI, etc.), \
+internal category name (New Entrant, Bust, Stable, Durable, Transient, etc.), product line \
+name, channel abbreviation (WS, etc.), and any other term that needs definition.
+8. Output ONLY the JSON object. No extra text before or after."""
 
 SECTION_WRITER_SYSTEM_PROMPT = """\
 You are a senior data analyst writing ONE section of a business report for executives.
@@ -163,15 +218,30 @@ Your job for THIS SECTION ONLY:
 1. Write a clear ## section heading followed by the detailed narrative.
 2. For each key finding, include:
    - A business-readable sub-heading (### level)
+   - MANDATORY: A "Basis of Preparation" opening paragraph BEFORE any results. This paragraph
+     must explain HOW the analysis was performed: what data was used, how categories/cohorts
+     were defined (with explicit criteria), what methodology was applied, and any assumptions.
+     The reader must never encounter a category, cohort, or derived metric without first
+     understanding how it was constructed.
    - MANDATORY year-by-year comparison tables when findings span multiple periods.
      Always show 3-4 years + LTM if the latest year is incomplete.
      Always include a CAGR row when you have 3+ years of data.
      Format as proper markdown tables.
-   - A 3-5 sentence explanation of what was found and why it matters.
+   - A thorough narrative (5-10 sentences minimum) explaining what was found, why it matters
+     for the business, and what implications it carries. Be expansive — provide rich context
+     and interpretation, not just raw numbers.
    - Graph references using EXACTLY: [GRAPH: filename.png]
-3. Be thorough and detailed — you are writing ONLY this section, so give it full attention.
+3. Be thorough, detailed, and VERBOSE — you are writing ONLY this section, so give it full
+   attention. Each sub-section should be 300-600 words of prose (excluding tables). Explain
+   the "how" and "why" behind every finding, not just the "what".
 4. Do NOT write an executive summary — that will be handled separately.
 5. Do NOT include Python code.
+
+CURRENCY FORMAT — MANDATORY:
+All monetary values MUST use the euro symbol prefix with lowercase magnitude suffix.
+Correct: ~€0.57m, €16.7m, €32.8m, €62.5m  |  WRONG: "EUR 0.57M", "EUR ~0.57M"
+Use € symbol (never "EUR" before amounts). Lowercase suffixes: k, m, bn.
+Place ~ BEFORE € when approximate: ~€0.57m
 
 TONE — Write in a formal, senior consulting register. Avoid conversational or didactic phrases. \
 Use professional formulations: "This pattern is consistent with...", "This trend reflects...", etc.
@@ -190,12 +260,22 @@ You will receive:
 - Guidance on what the summary must cover
 - The overall knowledge base
 
-Write a one-page Executive Summary:
+Write a comprehensive Executive Summary:
 1. Start with ## Executive Summary
-2. Open with a 2-3 sentence overview of the business and dataset scope.
+2. Open with a 3-4 sentence overview of the business, dataset scope, and analytical approach.
 3. Then list 5-7 bullet points — the most important things to know about this business.
    Each bullet should be specific (include numbers) and actionable.
-4. Close with a brief forward-looking paragraph on key risks and opportunities.
+   IMPORTANT: Each bullet point MUST include a cross-reference to the relevant report section
+   where the supporting analysis can be found. Use the format "(see Section N: Title)" at
+   the end of each bullet. This allows readers to navigate directly to the detailed analysis.
+4. Close with a substantive forward-looking paragraph on key risks and opportunities,
+   again referencing the relevant sections that support each risk or opportunity identified.
+
+CURRENCY FORMAT — MANDATORY:
+All monetary values MUST use the euro symbol prefix with lowercase magnitude suffix.
+Correct: ~€0.57m, €16.7m, €32.8m, €62.5m  |  WRONG: "EUR 0.57M", "EUR ~0.57M"
+Use € symbol (never "EUR" before amounts). Lowercase suffixes: k, m, bn.
+Place ~ BEFORE € when approximate: ~€0.57m
 
 TONE — Formal, senior consulting register. No jargon. Specific numbers over vague statements.
 Output clean markdown. Do NOT include Python code."""
@@ -446,6 +526,7 @@ def parse_outline_json(raw_text: str) -> dict:
         sec.setdefault("guidance", "")
     outline.setdefault("report_title", "Final Analysis Report")
     outline.setdefault("executive_summary_guidance", "")
+    outline.setdefault("glossary_terms", [])
 
     return outline
 
@@ -530,12 +611,24 @@ def build_executive_summary_prompt(
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("|"):
                 digest_lines.append(stripped)
-        section_digest.append("\n".join(digest_lines) if digest_lines else f"Section {i+1}")
+        section_digest.append(
+            f"Section {i+1}: " +
+            ("\n".join(digest_lines) if digest_lines else f"Section {i+1}")
+        )
 
     digest_text = "\n\n".join(section_digest)
 
+    # Build a numbered section list for cross-referencing
+    section_list = "\n".join(
+        f"- Section {i+1}: {sec['title']}"
+        for i, sec in enumerate(outline.get("sections", []))
+    )
+
     return f"""## Architect's Summary Guidance
 {outline.get('executive_summary_guidance', 'Summarize the 5-7 most important findings.')}
+
+## Report Section Structure (use these for cross-references)
+{section_list}
 
 ## Section Headings and Key Tables from the Completed Report
 {digest_text}
@@ -545,7 +638,61 @@ def build_executive_summary_prompt(
 
 ---
 
-Write the Executive Summary now. Start with ## Executive Summary."""
+Write the Executive Summary now. Start with ## Executive Summary.
+IMPORTANT: Each bullet point in the summary MUST include a cross-reference to the relevant
+section using the format "(see Section N: Title)". This allows executives to navigate directly
+to the supporting analysis. Use the section numbers and titles listed above."""
+
+
+GLOSSARY_SYSTEM_PROMPT = """\
+You are a technical editor compiling a Glossary for a business due-diligence report.
+
+You will receive:
+- The completed report sections (so you can identify every term that needs defining)
+- A suggested list of terms from the report architect
+
+Write a ## Glossary section formatted as a markdown definition list / table.
+Include EVERY abbreviation, acronym, internal category name, cohort label, product line name,
+channel code, and technical metric used anywhere in the report.
+
+Format as a clean markdown table:
+| Term | Definition |
+|------|-----------|
+| ASP  | Average Selling Price — revenue divided by units sold ... |
+
+Rules:
+- Sort terms alphabetically.
+- Each definition should be 1-2 sentences: concise but complete.
+- For cohort/category names (e.g. "New Entrant", "Bust"), include the classification criteria
+  used in the analysis (e.g. "models with zero revenue in the prior 12-month window").
+- For abbreviations, spell out the full term first, then explain its meaning.
+- Include monetary format note: "All monetary figures are denominated in euros (€)."
+- Do NOT include Python code.
+Output clean markdown starting with ## Glossary."""
+
+
+def build_glossary_prompt(
+    outline: dict,
+    section_markdowns: list,
+    summary_md: str,
+) -> str:
+    """Build the user prompt for glossary generation."""
+    # Combine all report text for term detection
+    full_report_text = summary_md + "\n\n" + "\n\n".join(section_markdowns)
+
+    suggested_terms = outline.get("glossary_terms", [])
+    terms_text = "\n".join(f"- {t}" for t in suggested_terms) if suggested_terms else "None provided"
+
+    return f"""## Suggested Terms from Report Architect
+{terms_text}
+
+## Full Report Text (scan for any additional terms to define)
+{full_report_text}
+
+---
+
+Write the Glossary now. Start with ## Glossary. Include every abbreviation, acronym, internal
+term, cohort name, and technical metric used in the report above. Sort alphabetically."""
 
 
 def _llm_call(
@@ -696,13 +843,27 @@ def generate_report_iterative(
     total_usage["input"] += usage.input_tokens
     total_usage["output"] += usage.output_tokens
 
+    # ── B.3 (glossary): Generate Glossary ─────────────────────────────────────
+    glossary_max_tokens = config.get("phase2_glossary_max_tokens", 4000)
+    logger.info(f"\n[B.3] Writing Glossary...")
+    glossary_prompt = build_glossary_prompt(outline, section_markdowns, summary_md)
+
+    glossary_md, usage = _llm_call(
+        client, model, GLOSSARY_SYSTEM_PROMPT, glossary_prompt,
+        glossary_max_tokens, label="B.3 Glossary",
+    )
+    total_usage["input"] += usage.input_tokens
+    total_usage["output"] += usage.output_tokens
+
     # ── B.4: Assemble ─────────────────────────────────────────────────────────
+    # Order: Title → Executive Summary → Sections → Glossary
     logger.info(f"\n[B.4] Assembling final report...")
     report_title = outline.get("report_title", "Final Analysis Report")
     final_parts = [f"# {report_title}\n"]
+    final_parts.append(summary_md)  # Executive Summary FIRST
     for section_md in section_markdowns:
         final_parts.append(section_md)
-    final_parts.append(summary_md)
+    final_parts.append(glossary_md)  # Glossary at the end
 
     final_report = "\n\n---\n\n".join(final_parts)
 
@@ -784,15 +945,29 @@ def _add_markdown_table_to_doc(doc, header_line: str, data_lines: list) -> None:
             cell.text = ""  # clear before adding a styled run
 
             para = cell.paragraphs[0]
-            run = para.add_run(cell_text)
-            run.font.name = BODY_FONT
-            run.font.size = Pt(10)
+
+            # Handle **bold** markers in table cells (e.g. **Total**, **EUR 21.76M**)
+            if "**" in cell_text and row_idx > 0:
+                parts = re.split(r"(\*\*[^*]+\*\*)", cell_text)
+                for part in parts:
+                    if part.startswith("**") and part.endswith("**"):
+                        run = para.add_run(part[2:-2])
+                        run.bold = True
+                    else:
+                        run = para.add_run(part)
+                    run.font.name = BODY_FONT
+                    run.font.size = Pt(10)
+            else:
+                run = para.add_run(cell_text)
+                run.font.name = BODY_FONT
+                run.font.size = Pt(10)
 
             if row_idx == 0:
                 # Header: dark-green background, white bold text
                 _set_cell_shading(cell, HEADER_BG)
-                run.bold = True
-                run.font.color.rgb = HEADER_FG
+                for run in para.runs:
+                    run.bold = True
+                    run.font.color.rgb = HEADER_FG
 
     doc.add_paragraph()
 
