@@ -95,7 +95,23 @@ Your job:
 4. End with a one-page Executive Summary: the 5–7 most important things to know about
    this business from the data. Use clear bullet points.
 
-Write for a business audience. Avoid statistical jargon.
+5. TONE — Write in a formal, senior consulting register throughout. Avoid conversational,
+   didactic, or explanatory phrases (e.g. "This is exactly how wholesale ordering works:",
+   "This makes sense because", "It's worth noting that"). Instead, use professional
+   formulations such as "This pattern is consistent with...", "This trend reflects...",
+   "This dynamic is in line with...", "As expected in the X segment, ...".
+   Never explain obvious industry mechanics as if educating the reader.
+
+6. TERM INTRODUCTION — When a specific product model name, customer segment label, or
+   internal category name is referenced for the first time in a section, provide brief
+   contextual identification so that a reader unfamiliar with the company's internal
+   naming conventions can follow. Embed this naturally in the prose — for example:
+   "True Rising — the brand's highest-revenue running model — posted..." or
+   "the TRIBE line (lifestyle and fashion-oriented footwear)". Do not assume the reader
+   knows internal product names or segment definitions.
+
+Write for a senior business audience. Avoid statistical jargon. Assume readers are familiar
+with industry concepts but not with this company's internal product names or segment labels.
 Output as clean markdown. Do NOT include Python code blocks."""
 
 # ─── File Utilities ───────────────────────────────────────────────────────────

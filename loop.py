@@ -179,7 +179,10 @@ Your job:
 2. If the code ran but the output is empty, trivial, or uninformative (e.g. "0 rows found"),
    mark status as "failure" with error_type "EmptyResult".
 3. If the output contains real business findings (numbers, distributions, trends, rankings),
-   mark status as "success". Write a plain-English summary a business person can read.
+   mark status as "success". Write a plain-English summary in a formal, senior consulting tone.
+   Avoid conversational or explanatory phrases (e.g. "This is exactly how X works", "It makes
+   sense that..."). Use professional formulations: "This pattern is consistent with...",
+   "This trend reflects...", "As is typical in the X segment, ...".
 4. Be specific in suggested_followup: explain WHAT to investigate next, WHY it would be valuable,
    and WHAT you expect to find. A vague "investigate further" is not acceptable.
 5. In dead_ends: list any analysis directions that this result confirms are NOT worth pursuing
