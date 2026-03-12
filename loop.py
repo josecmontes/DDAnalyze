@@ -132,6 +132,16 @@ Rules:
 Always compute and print CAGR when you have 3+ years of data (use fractional N for partial years).
 Use pandas tabulate or manual string formatting — never raw DataFrame repr.
 
+CURRENCY FORMAT — MANDATORY:
+All monetary values MUST use the euro symbol prefix with lowercase magnitude suffix.
+Correct format: ~€0.57m, €16.7m, €32.8m, €62.5m, €1.2k, €3.4bn
+WRONG formats (never use these): "EUR 0.57M", "EUR ~0.57M", "EUR 16.7M", "0.57M EUR"
+Rules:
+- Always use the € symbol, never the word "EUR" before amounts.
+- Use lowercase magnitude suffixes: k (thousands), m (millions), bn (billions).
+- Place the ~ (approximate) symbol BEFORE the € sign when needed: ~€0.57m
+- In tables, be consistent: all cells in the same column must use the same format.
+
 GRAPHS:
 You may (and should, when insightful) generate charts using matplotlib or seaborn.
 - Save every chart to the graphs folder provided in the iteration info.
