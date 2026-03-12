@@ -6,7 +6,10 @@ summarizer_every_n: 10       # run Summarizer every N iterations
 model: claude-sonnet-4-6
 max_tokens: 6000
 analyst_max_tokens: 20000   # Analyst returns JSON with embedded Python code; needs more room
-phase2_max_tokens: 50000  
+phase2_max_tokens: 50000
+phase2_architect_max_tokens: 4000    # B.1: outline JSON generation
+phase2_section_max_tokens: 8000      # B.3: per-section writing budget
+phase2_summary_max_tokens: 4000      # B.3: executive summary budget
 data_file: workspace/data.xlsx
 task_file: task.md
 active_context_file: active_context.md

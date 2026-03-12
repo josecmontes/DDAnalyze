@@ -114,6 +114,92 @@ Write for a senior business audience. Avoid statistical jargon. Assume readers a
 with industry concepts but not with this company's internal product names or segment labels.
 Output as clean markdown. Do NOT include Python code blocks."""
 
+# ─── Iterative Pipeline Prompts ──────────────────────────────────────────────
+
+ARCHITECT_SYSTEM_PROMPT = """\
+You are a report architect. You will receive the full knowledge base and analysis log from an \
+autonomous data-analysis pipeline. Your ONLY job is to design the structure of the final report.
+
+Output a single valid JSON object — no markdown fences, no commentary, no prose.
+
+The JSON schema:
+{
+  "report_title": "string — title for the overall report",
+  "sections": [
+    {
+      "section_number": int,
+      "title": "string — business-readable section heading",
+      "description": "string — 1-2 sentence scope of this section",
+      "iterations": [int, ...],   // which analysis iteration numbers belong here
+      "graphs": ["filename.png", ...],  // which graphs to embed in this section
+      "guidance": "string — writing instructions for the section author"
+    }
+  ],
+  "executive_summary_guidance": "string — key points the exec summary must cover"
+}
+
+Rules:
+1. Every successful analysis iteration must appear in EXACTLY ONE section.
+2. Order sections by business logic: start with high-level revenue/growth, move to product, \
+then customer/channel, then risk/concentration, then any remaining themes.
+3. Aim for 4-8 sections. Merge small related analyses; split large heterogeneous ones.
+4. In "guidance", specify what tables to include (year-by-year, top-N, etc.), what narrative \
+angle to take, and what comparisons to draw.
+5. Map graphs to sections based on their filenames and the analyses that generated them.
+6. The executive_summary_guidance should list the 5-7 most important business takeaways \
+the summary must cover.
+7. Output ONLY the JSON object. No extra text before or after."""
+
+SECTION_WRITER_SYSTEM_PROMPT = """\
+You are a senior data analyst writing ONE section of a business report for executives.
+
+You will receive:
+- The overall knowledge base (for grounding and cross-references)
+- The specific analyses assigned to YOUR section (2-5 analyses)
+- Writing guidance from the report architect
+- The list of graphs available for your section
+
+Your job for THIS SECTION ONLY:
+1. Write a clear ## section heading followed by the detailed narrative.
+2. For each key finding, include:
+   - A business-readable sub-heading (### level)
+   - MANDATORY year-by-year comparison tables when findings span multiple periods.
+     Always show 3-4 years + LTM if the latest year is incomplete.
+     Always include a CAGR row when you have 3+ years of data.
+     Format as proper markdown tables.
+   - A 3-5 sentence explanation of what was found and why it matters.
+   - Graph references using EXACTLY: [GRAPH: filename.png]
+3. Be thorough and detailed — you are writing ONLY this section, so give it full attention.
+4. Do NOT write an executive summary — that will be handled separately.
+5. Do NOT include Python code.
+
+TONE — Write in a formal, senior consulting register. Avoid conversational or didactic phrases. \
+Use professional formulations: "This pattern is consistent with...", "This trend reflects...", etc.
+
+TERM INTRODUCTION — When a specific product model name, customer segment label, or internal \
+category name is referenced for the first time, provide brief contextual identification so that \
+a reader unfamiliar with the company can follow. Embed this naturally in the prose.
+
+Output clean markdown for this section only. Start with ## heading."""
+
+EXEC_SUMMARY_SYSTEM_PROMPT = """\
+You are a senior data analyst writing the Executive Summary for a business due-diligence report.
+
+You will receive:
+- The section titles and key data tables from the completed report
+- Guidance on what the summary must cover
+- The overall knowledge base
+
+Write a one-page Executive Summary:
+1. Start with ## Executive Summary
+2. Open with a 2-3 sentence overview of the business and dataset scope.
+3. Then list 5-7 bullet points — the most important things to know about this business.
+   Each bullet should be specific (include numbers) and actionable.
+4. Close with a brief forward-looking paragraph on key risks and opportunities.
+
+TONE — Formal, senior consulting register. No jargon. Specific numbers over vague statements.
+Output clean markdown. Do NOT include Python code."""
+
 # ─── File Utilities ───────────────────────────────────────────────────────────
 
 def read_file(path: str) -> str:
@@ -300,6 +386,334 @@ Please generate a comprehensive final business report based on all of the above.
 Select the most valuable analyses, group them into logical sections, include year-by-year
 tables wherever relevant, embed graph references using [GRAPH: filename.png] syntax,
 and conclude with a concise executive summary. Do NOT include Python code."""
+
+
+# ─── Step B (Iterative): Architect → Filter → Writer → Assembler ─────────────
+
+import json
+
+
+def build_architect_prompt(entries: list, context_text: str, available_graphs: list) -> str:
+    """Build the user prompt for B.1 — the Architect generates a JSON outline."""
+    analyses_summary = []
+    for e in entries:
+        analyses_summary.append(
+            f"- Iteration {e.get('iteration', '?')}: "
+            f"[{e.get('analysis_type', 'Unknown')}] {e.get('hypothesis', '')}"
+            f"\n  Output excerpt: {_truncate(e.get('output', ''), 800)}"
+            f"\n  Evaluation excerpt: {_truncate(e.get('evaluation', ''), 400)}"
+        )
+    analyses_text = "\n".join(analyses_summary)
+
+    graphs_text = ""
+    if available_graphs:
+        graphs_text = "\n## Available Graphs\n" + "\n".join(
+            f"- {fname}" for _, fname in available_graphs
+        )
+
+    return f"""## Knowledge Base
+{context_text}
+{graphs_text}
+
+## Successful Analyses ({len(entries)} total)
+{analyses_text}
+
+---
+
+Design the report structure. Output a single JSON object following the schema in your instructions.
+Every iteration number must appear in exactly one section. Map graphs to the sections where they are most relevant."""
+
+
+def parse_outline_json(raw_text: str) -> dict:
+    """Parse the Architect's JSON output, handling markdown fences if present."""
+    text = raw_text.strip()
+    # Strip markdown code fences if the model wrapped its output
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+
+    outline = json.loads(text)
+
+    # Basic validation
+    if "sections" not in outline or not isinstance(outline["sections"], list):
+        raise ValueError("Outline JSON missing 'sections' array")
+    for sec in outline["sections"]:
+        if "iterations" not in sec or "title" not in sec:
+            raise ValueError(f"Section missing required fields: {sec}")
+        sec.setdefault("section_number", 0)
+        sec.setdefault("description", "")
+        sec.setdefault("graphs", [])
+        sec.setdefault("guidance", "")
+    outline.setdefault("report_title", "Final Analysis Report")
+    outline.setdefault("executive_summary_guidance", "")
+
+    return outline
+
+
+def filter_entries_for_section(entries: list, iteration_ids: list) -> list:
+    """B.2 — Return only entries whose iteration number is in the given list."""
+    id_set = {str(i) for i in iteration_ids}
+    return [e for e in entries if str(e.get("iteration", "")) in id_set]
+
+
+def build_section_prompt(
+    section: dict,
+    section_entries: list,
+    context_text: str,
+    section_graphs: list,
+    previous_titles: list,
+) -> str:
+    """Build the user prompt for B.3 — writing one section."""
+    # Detailed analysis data for just this section's entries
+    parts = []
+    for e in section_entries:
+        part = f"""--- ANALYSIS {e.get('iteration', '?')} ---
+Type       : {e.get('analysis_type', '')}
+Hypothesis : {e.get('hypothesis', '')}
+Columns    : {e.get('columns_used', '')}
+
+Output:
+{_truncate(e.get('output', ''), 3000)}
+
+Evaluation:
+{_truncate(e.get('evaluation', ''), 1200)}
+"""
+        parts.append(part)
+    analyses_text = "\n\n".join(parts)
+
+    graphs_text = ""
+    if section_graphs:
+        graphs_text = "\n## Graphs Available for This Section\n" + "\n".join(
+            f"- {fname}" for _, fname in section_graphs
+        )
+
+    prev_text = ""
+    if previous_titles:
+        prev_text = (
+            "\n## Sections Already Written (avoid repeating their content)\n"
+            + "\n".join(f"- {t}" for t in previous_titles)
+        )
+
+    return f"""## Section to Write
+Title: {section['title']}
+Description: {section.get('description', '')}
+Architect Guidance: {section.get('guidance', '')}
+{prev_text}
+
+## Knowledge Base (for context and grounding)
+{context_text}
+{graphs_text}
+
+## Analyses Assigned to This Section ({len(section_entries)} total)
+
+{analyses_text}
+
+---
+
+Write this section now. Start with ## {section['title']} and be thorough and detailed.
+Include year-by-year tables wherever the data supports it. Reference graphs using [GRAPH: filename.png]."""
+
+
+def build_executive_summary_prompt(
+    outline: dict,
+    section_markdowns: list,
+    context_text: str,
+) -> str:
+    """Build the user prompt for the final exec summary call."""
+    # Extract section titles and any tables from the written sections
+    section_digest = []
+    for i, md in enumerate(section_markdowns):
+        # Grab heading and any tables
+        lines = md.split("\n")
+        digest_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("|"):
+                digest_lines.append(stripped)
+        section_digest.append("\n".join(digest_lines) if digest_lines else f"Section {i+1}")
+
+    digest_text = "\n\n".join(section_digest)
+
+    return f"""## Architect's Summary Guidance
+{outline.get('executive_summary_guidance', 'Summarize the 5-7 most important findings.')}
+
+## Section Headings and Key Tables from the Completed Report
+{digest_text}
+
+## Knowledge Base
+{context_text}
+
+---
+
+Write the Executive Summary now. Start with ## Executive Summary."""
+
+
+def _llm_call(
+    client,
+    model: str,
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int,
+    label: str = "",
+) -> tuple:
+    """Make a single streaming LLM call. Returns (text, usage)."""
+    logger.info(f"  [{label}] Sending request ({len(user_message):,}ch prompt, max_tokens={max_tokens})")
+
+    text = ""
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}],
+    ) as stream:
+        for chunk in stream.text_stream:
+            print(chunk, end="", flush=True)
+        response = stream.get_final_message()
+    print()  # newline after streaming
+
+    for block in response.content:
+        if block.type == "text":
+            text = block.text
+            break
+
+    usage = response.usage
+    logger.info(
+        f"  [{label}] Done — {len(text):,}ch | "
+        f"tokens in={usage.input_tokens:,} out={usage.output_tokens:,}"
+    )
+    return text, usage
+
+
+def generate_report_iterative(
+    client,
+    model: str,
+    entries: list,
+    context_text: str,
+    available_graphs: list,
+    config: dict,
+) -> str:
+    """
+    Iterative report generation pipeline: Architect → Filter → Writer → Assembler.
+    Returns the final assembled markdown report.
+    """
+    architect_max_tokens = config.get("phase2_architect_max_tokens", 4000)
+    section_max_tokens = config.get("phase2_section_max_tokens", 8000)
+    summary_max_tokens = config.get("phase2_summary_max_tokens", 4000)
+
+    total_usage = {"input": 0, "output": 0}
+
+    # ── B.1: The Architect ────────────────────────────────────────────────────
+    logger.info("\n[B.1] The Architect — generating report outline...")
+    architect_prompt = build_architect_prompt(entries, context_text, available_graphs)
+
+    architect_raw, usage = _llm_call(
+        client, model, ARCHITECT_SYSTEM_PROMPT, architect_prompt,
+        architect_max_tokens, label="B.1 Architect",
+    )
+    total_usage["input"] += usage.input_tokens
+    total_usage["output"] += usage.output_tokens
+
+    # Parse the JSON outline
+    try:
+        outline = parse_outline_json(architect_raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"[B.1] JSON parse failed ({e}), retrying with reinforcement...")
+        retry_prompt = (
+            architect_prompt
+            + "\n\nIMPORTANT: Your previous response was not valid JSON. "
+            "Output ONLY a valid JSON object, no markdown fences, no commentary."
+        )
+        architect_raw, usage = _llm_call(
+            client, model, ARCHITECT_SYSTEM_PROMPT, retry_prompt,
+            architect_max_tokens, label="B.1 Architect (retry)",
+        )
+        total_usage["input"] += usage.input_tokens
+        total_usage["output"] += usage.output_tokens
+        try:
+            outline = parse_outline_json(architect_raw)
+        except (json.JSONDecodeError, ValueError) as e2:
+            logger.error(f"[B.1] Retry also failed ({e2}). Falling back to legacy single-call.")
+            return None  # Signal caller to use legacy path
+
+    logger.info(
+        f"[B.1] Outline: {len(outline['sections'])} sections, "
+        f"title=\"{outline.get('report_title', 'N/A')}\""
+    )
+    for sec in outline["sections"]:
+        logger.info(
+            f"       Section {sec['section_number']}: {sec['title']} "
+            f"(iterations={sec['iterations']}, graphs={sec.get('graphs', [])})"
+        )
+
+    # ── B.2 + B.3: Filter & Write each section ───────────────────────────────
+    section_markdowns = []
+    previous_titles = []
+
+    for sec_idx, section in enumerate(outline["sections"]):
+        sec_num = sec_idx + 1
+        logger.info(f"\n[B.3] Writing section {sec_num}/{len(outline['sections'])}: {section['title']}")
+
+        # B.2: Filter entries for this section
+        section_entries = filter_entries_for_section(entries, section["iterations"])
+        section_graphs = [
+            g for g in available_graphs if g[1] in section.get("graphs", [])
+        ]
+
+        if not section_entries:
+            logger.warning(f"  [B.3] No entries found for section {sec_num}, skipping.")
+            section_markdowns.append(f"## {section['title']}\n\n*No analyses available for this section.*\n")
+            previous_titles.append(section["title"])
+            continue
+
+        logger.info(
+            f"  [B.2] Filtered: {len(section_entries)} analyses, "
+            f"{len(section_graphs)} graphs"
+        )
+
+        # B.3: Write the section
+        section_prompt = build_section_prompt(
+            section, section_entries, context_text, section_graphs, previous_titles,
+        )
+
+        section_md, usage = _llm_call(
+            client, model, SECTION_WRITER_SYSTEM_PROMPT, section_prompt,
+            section_max_tokens, label=f"B.3 Section {sec_num}",
+        )
+        total_usage["input"] += usage.input_tokens
+        total_usage["output"] += usage.output_tokens
+
+        section_markdowns.append(section_md)
+        previous_titles.append(section["title"])
+
+    # ── B.3 (final): Executive Summary ────────────────────────────────────────
+    logger.info(f"\n[B.3] Writing Executive Summary...")
+    summary_prompt = build_executive_summary_prompt(outline, section_markdowns, context_text)
+
+    summary_md, usage = _llm_call(
+        client, model, EXEC_SUMMARY_SYSTEM_PROMPT, summary_prompt,
+        summary_max_tokens, label="B.3 Exec Summary",
+    )
+    total_usage["input"] += usage.input_tokens
+    total_usage["output"] += usage.output_tokens
+
+    # ── B.4: Assemble ─────────────────────────────────────────────────────────
+    logger.info(f"\n[B.4] Assembling final report...")
+    report_title = outline.get("report_title", "Final Analysis Report")
+    final_parts = [f"# {report_title}\n"]
+    for section_md in section_markdowns:
+        final_parts.append(section_md)
+    final_parts.append(summary_md)
+
+    final_report = "\n\n---\n\n".join(final_parts)
+
+    logger.info(
+        f"[B.4] Assembly complete — {len(final_report):,}ch | "
+        f"Total tokens: in={total_usage['input']:,} out={total_usage['output']:,} "
+        f"combined={total_usage['input'] + total_usage['output']:,}"
+    )
+
+    return final_report
+
 
 # ─── Step C: Word Document Builder ───────────────────────────────────────────
 
@@ -552,6 +966,20 @@ def build_word_document(report_md: str, graphs_folder: str, output_path: str) ->
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def _generate_report_legacy(
+    client, model: str, entries: list, context_text: str, available_graphs: list,
+) -> str:
+    """Legacy single-call report generation (fallback if iterative pipeline fails)."""
+    user_message = build_report_prompt(entries, context_text, available_graphs)
+    logger.info(f"  [Legacy] Single-call generation ({len(user_message):,}ch prompt)")
+
+    report_text, usage = _llm_call(
+        client, model, PHASE2_SYSTEM_PROMPT, user_message,
+        PHASE2_MAX_TOKENS, label="Legacy Single-Call",
+    )
+    return report_text
+
+
 def main() -> None:
     # Load config
     config = yaml.safe_load(read_file("config.yaml"))
@@ -569,7 +997,7 @@ def main() -> None:
     log_file = setup_logging(debug=debug_logging)
 
     logger.info("=" * 60)
-    logger.info("Phase 2 — Final Report Generator")
+    logger.info("Phase 2 — Final Report Generator (Iterative Pipeline)")
     logger.info(f"Archive : {archive_path}")
     logger.info(f"Context : {context_path}")
     logger.info(f"Graphs  : {graphs_folder}")
@@ -604,52 +1032,33 @@ def main() -> None:
     extract_code_to_file(entries, extracted_code_path)
     logger.info(f"[Step A] Done in {time.time()-t_a:.1f}s")
 
-    # ── Step B: Generate markdown report (LLM) ────────────────────────────────
+    # ── Step B: Generate markdown report (Iterative Pipeline) ─────────────────
     available_graphs = list_available_graphs(graphs_folder)
-    logger.info(f"\n[Step B] Generating markdown report (streaming)...")
+    logger.info(f"\n[Step B] Generating markdown report (iterative pipeline)...")
     logger.info(f"         Analyses: {len(entries)}  |  Available graphs: {len(available_graphs)}")
     if available_graphs:
         for _, fname in available_graphs:
             logger.info(f"           - {fname}")
     logger.info("")
 
-    user_message = build_report_prompt(entries, context_text, available_graphs)
-    logger.debug(
-        f"[Step B] Prompt size: {len(user_message):,}ch "
-        f"(system={len(PHASE2_SYSTEM_PROMPT):,}ch  user={len(user_message):,}ch)"
+    client = anthropic.Anthropic(api_key=API_KEY)
+    t_b = time.time()
+
+    # Try iterative pipeline; fall back to legacy on failure
+    report_text = generate_report_iterative(
+        client, model, entries, context_text, available_graphs, config,
     )
 
-    client = anthropic.Anthropic(api_key=API_KEY)
-    logger.info("-" * 60)
-
-    t_b = time.time()
-    report_text = ""
-    with client.messages.stream(
-        model=model,
-        max_tokens=PHASE2_MAX_TOKENS,
-        system=PHASE2_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for chunk in stream.text_stream:
-            print(chunk, end="", flush=True)
-        response = stream.get_final_message()
-
-    print(f"\n{'-' * 60}\n")
-
-    for block in response.content:
-        if block.type == "text":
-            report_text = block.text
-            break
+    if report_text is None:
+        logger.warning("[Step B] Iterative pipeline failed, using legacy single-call...")
+        report_text = _generate_report_legacy(
+            client, model, entries, context_text, available_graphs,
+        )
 
     b_elapsed = time.time() - t_b
-    usage = response.usage
     write_file(report_md_path, report_text)
-    logger.info(f"Markdown report saved to: {report_md_path} ({len(report_text):,}ch)")
-    logger.info(
-        f"[Step B] Done in {b_elapsed:.1f}s | "
-        f"tokens in={usage.input_tokens:,}  out={usage.output_tokens:,}  "
-        f"total={usage.input_tokens + usage.output_tokens:,}"
-    )
+    logger.info(f"\nMarkdown report saved to: {report_md_path} ({len(report_text):,}ch)")
+    logger.info(f"[Step B] Total time: {b_elapsed:.1f}s")
 
     # ── Step C: Build Word document ───────────────────────────────────────────
     logger.info(f"\n[Step C] Building Word document ({report_docx_path})...")
