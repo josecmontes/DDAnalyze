@@ -130,6 +130,9 @@ def write_file(path: str, content: str) -> None:
 _INTERNAL_ERROR_LABELS = {
     "JSON_PARSE_ERROR", "CRITIC_JSON_PARSE_ERROR", "TIMEOUT", "FATAL_ERROR",
 }
+config = yaml.safe_load(read_file("config.yaml"))
+PHASE2_MAX_TOKENS = config.get("analyst_max_tokens", 16384)
+
 
 def parse_archive(archive_text: str) -> list:
     """
@@ -623,7 +626,7 @@ def main() -> None:
     report_text = ""
     with client.messages.stream(
         model=model,
-        max_tokens=8192,
+        max_tokens=PHASE2_MAX_TOKENS,
         system=PHASE2_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     ) as stream:

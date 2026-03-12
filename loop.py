@@ -69,7 +69,8 @@ def setup_logging(debug: bool = False, log_dir: str = "logs") -> Path:
 
 # ─── System Prompts ───────────────────────────────────────────────────────────
 
-ANALYST_SYSTEM_PROMPT = """You are the Financial Due Dilligence Analyst agent in an autonomous data analysis loop. Your job is to investigate
+ANALYST_SYSTEM_PROMPT = """You are an objective and professional Financial Due Dilligence Analyst agent in an autonomous data analysis loop. 
+Your job is to investigate
 a business dataset by writing Python code that produces readable, printed output.
 
 You will receive:
@@ -79,11 +80,14 @@ You will receive:
 Your job:
 1. Read the knowledge base carefully. Do not repeat an analysis that has already been done
    unless you can add a meaningfully different angle (different columns, different time window,
-   different breakdown). Avoid approaches listed in "Dead Ends & Closed Paths".
-2. Choose one analysis from the catalog, or a logical extension of it.
+   different breakdown). Do deep dive or repeat an analysis by sub-sets if you think it will enhance the business understanding.
+    Avoid approaches listed in "Dead Ends & Closed Paths".
+2. Choose one analysis from the catalog, or a logical extension of it. Ensure that the main, high-level and introductory analysis 
+    tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis. 
+    Only after the basic overviews are well covered and understood by previous iterations go ahead planning more in-depth analysis.
 3. Write clean, simple Python code that loads the data and prints results.
 4. Focus on business understanding: who buys, how much, when, how concentrated, how it changes.
-   Do NOT perform regression, hypothesis testing, or statistical modeling.
+   Only perform regression, hypothesis testing, or statistical modeling to enhance business understanding.
 5. Return ONLY a valid JSON object with fields: hypothesis, analysis_type, columns_used, code.
    No preamble. No markdown. No explanation outside the JSON.
 
@@ -110,7 +114,7 @@ When the dataset ends mid-year, compute CAGR using the fractional number of year
   CAGR = (LTM_value / FY_first_value) ^ (1 / N) − 1
 Always print N explicitly (e.g. "CAGR (N=2.25y)") so readers understand the time span.
 
-Table format — TRANSPOSED (columns = time periods, rows = metrics):
+Table format — (columns = time periods, rows = metrics):
 Print with print() and aligned columns. This is the standard layout:
 
   Metric    | FY2021 | FY2022 | LTM23 | CAGR (N=2.25y)
@@ -152,7 +156,7 @@ If the import fails for any reason, manually apply the theme using these exact v
     import matplotlib.pyplot as plt
     DELOITTE_COLORS = ['#26890D', '#046A38', '#404040', '#0D8390', '#00ABAB']
     plt.rcParams.update({
-        'font.family': ['Arial', 'Liberation Sans', 'sans-serif'],
+        'font.family': ['Arial', 'sans-serif'],
         'axes.prop_cycle': plt.cycler('color', DELOITTE_COLORS),
         'axes.titlesize': 14, 'axes.titleweight': 'bold',
         'axes.titlecolor': '#26890D',
@@ -197,7 +201,7 @@ Your job:
    - dead_ends: list of investigation directions confirmed not worth pursuing (may be empty list)
    No preamble. No markdown fences."""
 
-SUMMARIZER_SYSTEM_PROMPT = """You are the Financial Due Dilligence Summarizer agent in an autonomous data analysis loop. The active knowledge
+SUMMARIZER_SYSTEM_PROMPT = """You are an objective and professional Financial Due Dilligence Summarizer agent in an autonomous data analysis loop. The active knowledge
 base has grown and needs to be condensed so future agents can read it efficiently.
 
 Your job:
@@ -780,11 +784,19 @@ def _format_archive_entry(
 def run_code(script_path: str, timeout: int = 120) -> tuple:
     """Execute a Python script; return (stdout, stderr)."""
     t0 = time.time()
+    
+    # Force the child process to encode its standard streams in UTF-8
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+
     try:
         result = subprocess.run(
             [sys.executable, script_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",    # Force parent to decode output as UTF-8
+            errors="replace",    # Silently replace any completely rogue characters
+            env=env,             # Pass the forced UTF-8 environment
             timeout=timeout,
         )
         elapsed = time.time() - t0

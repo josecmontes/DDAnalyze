@@ -1,2 +1,0 @@
-2026-03-11 23:37:47 [DEBUG  ] [LLM] Sending request | system=1,282ch user=35ch max_tokens=4096
-2026-03-11 23:37:53 [INFO   ]   [LLM] Done in 6.1s | tokens in=351 out=275

@@ -29,7 +29,7 @@ TITLE_COLOR  = GREEN_MEDIUM   # Chart & figure titles
 HEADER_COLOR = GREEN_DARK     # Table column-heading background (Word docs)
 
 FONT_FAMILY  = "Arial"
-_FONT_STACK  = [FONT_FAMILY, "Liberation Sans", "sans-serif"]
+_FONT_STACK  = [FONT_FAMILY, "sans-serif"]
 
 
 def apply_deloitte_style() -> None:
