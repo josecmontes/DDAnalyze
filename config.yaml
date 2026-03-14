@@ -20,3 +20,15 @@ max_code_retries: 3          # retry failed code this many times within the same
 fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run
 summarize_on_start: false    # set to true to run Summarizer on active_context.md before the first iteration (useful when re-running without fresh_start)
 debug_logging: true         # set to true to enable DEBUG-level console output (file log always captures DEBUG)
+
+# ─── Web Research Module ──────────────────────────────────────────────────────
+web_research_iterations: 10          # number of web research iterations to run
+web_research_model: claude-sonnet-4-6  # model for web research (can differ from data analysis model)
+web_research_max_tokens: 6000        # Synthesizer token budget
+web_research_researcher_max_tokens: 8000   # Researcher agent token budget
+web_research_search_max_tokens: 16000      # Web search + synthesis token budget
+web_research_context_file: web_research_context.md
+web_research_archive_file: web_research_archive.txt
+web_research_summarizer_every_n: 5   # compress web research context every N iterations
+web_research_fresh_start: false      # set to true to reset web research context and archive
+web_research_interval_minutes: 0     # sleep between web research iterations
