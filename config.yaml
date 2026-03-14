@@ -32,3 +32,20 @@ web_research_archive_file: web_research_archive.txt
 web_research_summarizer_every_n: 5   # compress web research context every N iterations
 web_research_fresh_start: false      # set to true to reset web research context and archive
 web_research_interval_minutes: 0     # sleep between web research iterations
+
+# ─── Orchestrator ────────────────────────────────────────────────────────────
+# Schedule defines the sequence of phases. Each entry: {type, iterations}
+# Types: data_analysis, web_research, report
+# Override at runtime with: python orchestrator.py --schedule '[...]'
+orchestrator_schedule:
+  - type: data_analysis
+    iterations: 5
+  - type: web_research
+    iterations: 3
+  - type: data_analysis
+    iterations: 5
+  - type: web_research
+    iterations: 2
+  - type: data_analysis
+    iterations: 5
+  - type: report
