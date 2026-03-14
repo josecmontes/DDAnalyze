@@ -190,9 +190,10 @@ and technical metrics used across analyses that should be defined in the glossar
 }
 
 Rules:
-1. Every successful analysis iteration must appear in EXACTLY ONE section.
-2. Order sections by business logic: start with high-level revenue/growth, move to product, \
+1. Order sections by business logic: start with high-level revenue/growth, move to product, \
 then customer/channel, then risk/concentration, then any remaining themes.
+2. Try to include all successful analysis iteration but you are able to discard some if are deemed \
+    repetitive or not providing additional value to the final report.
 3. Aim for 4-8 sections. Merge small related analyses; split large heterogeneous ones.
 4. In "guidance", specify what tables to include (year-by-year, top-N, etc.), what narrative \
 angle to take, and what comparisons to draw. ALWAYS include instructions for a Basis of \
