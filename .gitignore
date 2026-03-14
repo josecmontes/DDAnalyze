@@ -26,7 +26,9 @@ workspace/current_analysis.py
 # Loop outputs (large / generated — commit selectively if desired)
 full_archive.txt
 final_report.md
+final_report.docx
 active_context.md
+extracted_code.md
 
 # OS
 .DS_Store
