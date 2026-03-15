@@ -314,6 +314,31 @@ def run_report_generation() -> bool:
         return False
 
 
+def run_deloitte_report() -> bool:
+    """Run the Deloitte premium HTML report generator."""
+    logger.info(f"\n{'─' * 60}")
+    logger.info("PHASE: DELOITTE PREMIUM REPORT")
+    logger.info(f"{'─' * 60}")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "deloitte_report.py"],
+            timeout=900,  # 15 min max — multiple LLM calls
+        )
+        success = result.returncode == 0
+        if success:
+            logger.info("[Deloitte Report] Generated deloitte_report.html")
+        else:
+            logger.warning(f"[Deloitte Report] Exited with code {result.returncode}")
+        return success
+    except subprocess.TimeoutExpired:
+        logger.error("[Deloitte Report] Timed out")
+        return False
+    except KeyboardInterrupt:
+        logger.info("[Deloitte Report] Interrupted by user")
+        return False
+
+
 # ─── User Guidance → Additional Iterations ───────────────────────────────────
 
 GUIDANCE_SYSTEM_PROMPT = """You are the orchestrator agent for a financial due diligence analysis system.
@@ -673,6 +698,7 @@ INTERACTIVE_HELP = """
 ║    /analyze <N>       Run N more data analysis iterations    ║
 ║    /research <N>      Run N more web research iterations     ║
 ║    /report            Regenerate the report                  ║
+║    /deloitte          Generate Deloitte premium HTML report  ║
 ║    /status            Show current state                     ║
 ║    /help              Show this help message                 ║
 ║    /quit              Exit interactive mode                  ║
@@ -733,6 +759,13 @@ def show_status(config: dict) -> None:
         docx_size = Path("final_report.docx").stat().st_size / 1024
         print(f"  Word doc: {docx_size:.1f} KB")
 
+    if Path("deloitte_report.html").exists():
+        html_size = Path("deloitte_report.html").stat().st_size / 1024
+        html_time = datetime.fromtimestamp(
+            Path("deloitte_report.html").stat().st_mtime
+        ).strftime("%Y-%m-%d %H:%M")
+        print(f"\nDeloitte Report: Generated ({html_size:.1f} KB, last updated {html_time})")
+
     # Exports
     exports_dir = Path("workspace/exports")
     if exports_dir.exists():
@@ -781,6 +814,11 @@ def interactive_loop(client: anthropic.Anthropic, model: str, config: dict) -> N
         elif user_input.lower() == "/report":
             run_report_generation()
             print("\nReport regenerated. Check final_report.md and final_report.docx")
+            continue
+
+        elif user_input.lower() == "/deloitte":
+            run_deloitte_report()
+            print("\nDeloitte report generated. Check deloitte_report.html")
             continue
 
         elif user_input.lower().startswith("/analyze"):
@@ -904,6 +942,8 @@ def main() -> None:
         for i, (phase_type, n) in enumerate(schedule, 1):
             if phase_type == "report":
                 logger.info(f"  {i}. Report Generation")
+            elif phase_type == "deloitte_report":
+                logger.info(f"  {i}. Deloitte Premium HTML Report")
             else:
                 logger.info(f"  {i}. {phase_type.replace('_', ' ').title()} — {n} iterations")
         logger.info("")
@@ -918,6 +958,8 @@ def main() -> None:
                 run_web_research(n_iterations)
             elif phase_type == "report":
                 run_report_generation()
+            elif phase_type == "deloitte_report":
+                run_deloitte_report()
             else:
                 logger.warning(f"Unknown phase type: {phase_type}")
 

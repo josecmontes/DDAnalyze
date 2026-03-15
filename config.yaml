@@ -21,6 +21,17 @@ fresh_start: false           # set to true to reset active_context.md and full_a
 summarize_on_start: false    # set to true to run Summarizer on active_context.md before the first iteration (useful when re-running without fresh_start)
 debug_logging: true         # set to true to enable DEBUG-level console output (file log always captures DEBUG)
 
+# ─── Deloitte Report Module ──────────────────────────────────────────────────
+# Premium HTML report generator — produces a print-ready Deloitte-themed report
+# with Chart.js visualizations. Runs after loop.py and phase2.py.
+deloitte_report_model: claude-sonnet-4-6      # model for report generation
+deloitte_report_planner_max_tokens: 6000      # Stage 1: blueprint JSON
+deloitte_report_section_max_tokens: 10000     # Stage 2: per-section HTML + chart data
+deloitte_report_summary_max_tokens: 4000      # Stage 2: executive summary
+deloitte_report_glossary_max_tokens: 3000     # Stage 2: glossary
+deloitte_report_final_report: final_report.md # existing phase2 report (used as reference)
+deloitte_report_output: deloitte_report.html  # output file path
+
 # ─── Web Research Module ──────────────────────────────────────────────────────
 web_research_iterations: 10          # number of web research iterations to run
 web_research_model: claude-sonnet-4-6  # model for web research (can differ from data analysis model)
