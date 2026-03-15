@@ -1,51 +1,44 @@
-n_iterations: 30
-interval_minutes: 0
-repetition_mode: soft        # soft | hard | hybrid
-hybrid_threshold: 12         # if hybrid: switch from soft to hard after this iteration
-summarizer_every_n: 10       # run Summarizer every N iterations
-model: claude-sonnet-4-6
-max_tokens: 6000
-analyst_max_tokens: 20000   # Analyst returns JSON with embedded Python code; needs more room
-phase2_max_tokens: 50000
-phase2_architect_max_tokens: 4000    # B.1: outline JSON generation
-phase2_section_max_tokens: 8000      # B.3: per-section writing budget
-phase2_summary_max_tokens: 4000      # B.3: executive summary budget
-data_file: workspace/data.xlsx
-task_file: task.md
 active_context_file: active_context.md
+analyst_max_tokens: 20000
 archive_file: full_archive.txt
-workspace_script: workspace/current_analysis.py
-graphs_folder: workspace/graphs  # analyst saves PNG charts here; referenced (not read) in context
-max_code_retries: 3          # retry failed code this many times within the same iteration
-fresh_start: false           # set to true to reset active_context.md and full_archive.txt on next run
-summarize_on_start: false    # set to true to run Summarizer on active_context.md before the first iteration (useful when re-running without fresh_start)
-debug_logging: true         # set to true to enable DEBUG-level console output (file log always captures DEBUG)
-
-# ─── Web Research Module ──────────────────────────────────────────────────────
-web_research_iterations: 10          # number of web research iterations to run
-web_research_model: claude-sonnet-4-6  # model for web research (can differ from data analysis model)
-web_research_max_tokens: 6000        # Synthesizer token budget
-web_research_researcher_max_tokens: 8000   # Researcher agent token budget
-web_research_search_max_tokens: 16000      # Web search + synthesis token budget
-web_research_context_file: web_research_context.md
-web_research_archive_file: web_research_archive.txt
-web_research_summarizer_every_n: 5   # compress web research context every N iterations
-web_research_fresh_start: false      # set to true to reset web research context and archive
-web_research_interval_minutes: 0     # sleep between web research iterations
-
-# ─── Orchestrator ────────────────────────────────────────────────────────────
-# Schedule defines the sequence of phases. Each entry: {type, iterations}
-# Types: data_analysis, web_research, report
-# Override at runtime with: python orchestrator.py --schedule '[...]'
+data_file: workspace/data.xlsx
+debug_logging: true
+fresh_start: false
+graphs_folder: workspace/graphs
+hybrid_threshold: 12
+interval_minutes: 0
+max_code_retries: 3
+max_tokens: 6000
+model: claude-sonnet-4-6
+n_iterations: 5
 orchestrator_schedule:
-  - type: data_analysis
-    iterations: 5
-  - type: web_research
-    iterations: 3
-  - type: data_analysis
-    iterations: 5
-  - type: web_research
-    iterations: 2
-  - type: data_analysis
-    iterations: 5
-  - type: report
+- iterations: 5
+  type: data_analysis
+- iterations: 3
+  type: web_research
+- iterations: 5
+  type: data_analysis
+- iterations: 2
+  type: web_research
+- iterations: 5
+  type: data_analysis
+- type: report
+phase2_architect_max_tokens: 4000
+phase2_max_tokens: 50000
+phase2_section_max_tokens: 8000
+phase2_summary_max_tokens: 4000
+repetition_mode: soft
+summarize_on_start: false
+summarizer_every_n: 10
+task_file: task.md
+web_research_archive_file: web_research_archive.txt
+web_research_context_file: web_research_context.md
+web_research_fresh_start: false
+web_research_interval_minutes: 0
+web_research_iterations: 10
+web_research_max_tokens: 6000
+web_research_model: claude-sonnet-4-6
+web_research_researcher_max_tokens: 8000
+web_research_search_max_tokens: 16000
+web_research_summarizer_every_n: 5
+workspace_script: workspace/current_analysis.py

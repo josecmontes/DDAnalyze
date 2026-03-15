@@ -663,7 +663,7 @@ INTERACTIVE_HELP = """
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
 ║  Commands:                                                   ║
-║    <feedback text>    Provide analysis guidance/corrections   ║
+║    <feedback text>    Provide analysis guidance/corrections  ║
 ║                       → runs additional iterations + report  ║
 ║                                                              ║
 ║    /extract <request> Extract data to Excel                  ║
