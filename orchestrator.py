@@ -210,18 +210,15 @@ def _get_current_iteration(archive_path: str) -> int:
 # each module keeps its own logging and state management intact. Config
 # overrides are applied by temporarily patching config.yaml.
 
-def _patch_config(overrides: dict) -> dict:
-    """Apply temporary overrides to config.yaml. Returns original config for restore."""
-    config = yaml.safe_load(read_file("config.yaml"))
-    original = dict(config)
-    config.update(overrides)
-    write_file("config.yaml", yaml.dump(config, default_flow_style=False, allow_unicode=True))
-    return original
+def _make_override_env(overrides: dict) -> dict:
+    """Return a copy of os.environ with config overrides as a JSON env var.
 
-
-def _restore_config(original: dict) -> None:
-    """Restore config.yaml to its original state."""
-    write_file("config.yaml", yaml.dump(original, default_flow_style=False, allow_unicode=True))
+    Subprocesses read DDANALYZE_CONFIG_OVERRIDES and apply the values on top
+    of config.yaml in memory, so the file on disk is never modified.
+    """
+    env = os.environ.copy()
+    env["DDANALYZE_CONFIG_OVERRIDES"] = json.dumps(overrides)
+    return env
 
 
 def run_data_analysis(n_iterations: int, start_iteration: int = 1) -> bool:
@@ -230,7 +227,7 @@ def run_data_analysis(n_iterations: int, start_iteration: int = 1) -> bool:
     logger.info(f"PHASE: DATA ANALYSIS — {n_iterations} iterations (starting at iter {start_iteration})")
     logger.info(f"{'─' * 60}")
 
-    original = _patch_config({
+    env = _make_override_env({
         "n_iterations": n_iterations,
         "fresh_start": False,
         "summarize_on_start": False,
@@ -240,6 +237,7 @@ def run_data_analysis(n_iterations: int, start_iteration: int = 1) -> bool:
         result = subprocess.run(
             [sys.executable, "loop.py"],
             timeout=n_iterations * 300,  # 5 min per iteration max
+            env=env,
         )
         success = result.returncode == 0
         if success:
@@ -253,8 +251,6 @@ def run_data_analysis(n_iterations: int, start_iteration: int = 1) -> bool:
     except KeyboardInterrupt:
         logger.info("[Data Analysis] Interrupted by user")
         return False
-    finally:
-        _restore_config(original)
 
 
 def run_web_research(n_iterations: int) -> bool:
@@ -263,7 +259,7 @@ def run_web_research(n_iterations: int) -> bool:
     logger.info(f"PHASE: WEB RESEARCH — {n_iterations} iterations")
     logger.info(f"{'─' * 60}")
 
-    original = _patch_config({
+    env = _make_override_env({
         "web_research_iterations": n_iterations,
         "web_research_fresh_start": False,
     })
@@ -272,6 +268,7 @@ def run_web_research(n_iterations: int) -> bool:
         result = subprocess.run(
             [sys.executable, "web_research.py"],
             timeout=n_iterations * 300,
+            env=env,
         )
         success = result.returncode == 0
         if success:
@@ -285,8 +282,6 @@ def run_web_research(n_iterations: int) -> bool:
     except KeyboardInterrupt:
         logger.info("[Web Research] Interrupted by user")
         return False
-    finally:
-        _restore_config(original)
 
 
 def run_report_generation() -> bool:
