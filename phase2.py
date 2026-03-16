@@ -73,17 +73,28 @@ Your job:
 
 2. For each selected finding, write:
    - A clear, business-readable title (no jargon)
-   - MANDATORY: A year-by-year comparison table whenever the finding spans multiple periods.
-     Always show 3–4 years + LTM (Last-Twelve-Months) if the latest year is incomplete.
-     Always include a CAGR row when you have 3+ years of data.
-     Format tables as proper markdown tables:
-       | Year   | Revenue  | Customers | YoY %  |
-       |--------|----------|-----------|--------|
-       | FY2021 | $X       | X         | —      |
-       | FY2022 | $X       | X         | +X%    |
-       | FY2023 | $X       | X         | +X%    |
-       | LTM    | $X       | X         | +X%    |
-       | CAGR   |          |           | XX%    |
+   - MANDATORY: A comparison table whenever the finding spans multiple periods. 
+     You must strictly adhere to the following standard professional financial formatting for all tables:
+       1. Table Title: Place the title above the table in **bold**.
+       2. Header Row: The top-left cell MUST be the unit of measurement (e.g., `€k`, `#`). Subsequent columns MUST be the chronological time periods (e.g., `Dec 23`, `Dec 24`, `LTM`).
+       3. Alignment: Left-align the first column (categories/line items). Right-align all numerical columns.
+       4. Number Formatting: Use 2 decimal places for currency/averages (e.g., 5.61), whole numbers for counts (e.g., 135), and comma separators for thousands (e.g., 6,495).
+       5. Summary/Total Row: The final row of the main data block must be a total/blended row (or CAGR if 3+ years). **Bold** the entire row (both the label and the numbers).
+       6. Sub-tables (if applicable): If showing percentages, append them within the same table beneath a bolded row stating "**As % of Total**". Format the percentage numbers in *italics*.
+       7. Footer: Immediately below the Markdown table, add the data source on a new line (e.g., "Source: Company Dataset"). Do not use bold for the footer.
+    
+     Example Format:
+     **Revenue by Segment**
+     | €k | Dec 22 | Dec 23 | LTM |
+     |:---|---:|---:|---:|
+     | Segment A | 3,670.00 | 5,610.00 | 6,310.00 |
+     | Segment B | 4,980.00 | 5,690.00 | 5,980.00 |
+     | **Total** | **8,650.00** | **11,300.00** | **12,290.00** |
+     | **As % of Total** | | | |
+     | Segment A | *42.4%* | *49.6%* | *51.3%* |
+     | Segment B | *57.6%* | *50.4%* | *48.7%* |
+     Source: Customer Cube
+
    - A 3–5 sentence explanation of what was found and why it matters for the business.
    - If a graph was generated for this analysis, reference it with EXACTLY this syntax:
        [GRAPH: filename.png]
@@ -146,11 +157,11 @@ Your job:
    A section should typically be 400-800 words of prose (excluding tables), not 100-200.
 
 10. GLOSSARY — At the end of the report, include a ## Glossary section that defines every
-    abbreviation, acronym, internal term, analytical category, and technical metric used
-    in the report. Examples: LTM, CAGR, FY, ASP, HHI, NE (New Entrant), WS (Wholesale),
-    cohort names (Bust, Stable, Durable, Transient), product line names (CITY, TRIBE,
-    DISTRICT), and any other domain-specific terminology. Each entry should have a concise
-    but complete definition.
+   abbreviation, acronym, internal term, analytical category, and technical metric used
+   in the report. Examples: LTM, CAGR, FY, ASP, HHI, NE (New Entrant), WS (Wholesale),
+   cohort names (Bust, Stable, Durable, Transient), product line names (CITY, TRIBE,
+   DISTRICT), and any other domain-specific terminology. Each entry should have a concise
+   but complete definition.
 
 Write for a senior business audience. Avoid statistical jargon. Assume readers are familiar
 with industry concepts but not with this company's internal product names or segment labels.

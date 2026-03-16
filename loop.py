@@ -81,10 +81,10 @@ Your job:
 1. Read the knowledge base carefully. Do not repeat an analysis that has already been done
    unless you can add a meaningfully different angle (different columns, different time window,
    different breakdown). Do deep dive or repeat an analysis by sub-sets if you think it will enhance the business understanding.
-    Avoid approaches listed in "Dead Ends & Closed Paths".
+   Avoid approaches listed in "Dead Ends & Closed Paths".
 2. Choose one analysis from the catalog, or a logical extension of it. Ensure that the main, high-level and introductory analysis 
-    tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis. 
-    Only after the basic overviews are well covered and understood by previous iterations go ahead planning more in-depth analysis.
+   tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis. 
+   Only after the basic overviews are well covered and understood by previous iterations go ahead planning more in-depth analysis.
 3. Write clean, simple Python code that loads the data and prints results.
 4. Focus on business understanding: who buys, how much, when, how concentrated, how it changes.
    Only perform regression, hypothesis testing, or statistical modeling to enhance business understanding.
@@ -114,23 +114,27 @@ When the dataset ends mid-year, compute CAGR using the fractional number of year
   CAGR = (LTM_value / FY_first_value) ^ (1 / N) − 1
 Always print N explicitly (e.g. "CAGR (N=2.25y)") so readers understand the time span.
 
-Table format — (columns = time periods, rows = metrics):
-Print with print() and aligned columns. This is the standard layout:
+MANDATORY TABLE FORMATTING:
+When your Python code prints tables for time-series comparison (e.g., using pandas.to_markdown() or manual string formatting), you MUST output them strictly in this standard professional financial format using Markdown:
+1. Table Title: Print the title above the table in **bold** Markdown (e.g., `print("**Revenue by Segment**")`).
+2. Header Row: The top-left cell MUST be the unit of measurement (e.g., `€k`, `#`, `%`). Subsequent columns MUST be the chronological time periods (e.g., `FY21`, `FY22`, `LTM23`, `CAGR (N=X.XXy)`).
+3. Alignment: Left-align the first column (categories/metrics). Right-align all numerical columns.
+4. Number Formatting: Apply formatting to your dataframe before printing. Use 2 decimal places for currency/averages (e.g., 5.61), whole numbers for counts (e.g., 135), and comma separators for thousands (e.g., 6,495).
+5. Summary/Total Row: The final row of the main data block must be a total/blended row. Format the output so the entire row (label and numbers) is surrounded by **bold** markdown tags (e.g., `| **Total** | **8,650.00** |`).
+6. Sub-tables (if applicable): If printing percentages, append them as continuous rows within the same table beneath a bolded row stating `| **As % of Total** | | |`. Format the percentage values in *italics* (e.g., `| Segment A | *42.4%* |`).
+7. Footer: Print the data source immediately below the table on a new line (e.g., `print("Source: Internal Dataset")`).
 
-  Metric    | FY2021 | FY2022 | LTM23 | CAGR (N=2.25y)
-  ----------|--------|--------|-------|---------------
-  Metric A  |   x    |   x    |   x   |     XX%
-  Metric B  |   x    |   x    |   x   |     XX%
-  YoY %     |   —    |  +X%   |  +X%  |
-
-Rules:
-- Columns left-to-right: full fiscal years in order, then LTM (if applicable), then CAGR as the last column.
-- CAGR column applies to the row metrics (not YoY %). Use fractional N and label it "CAGR (N=X.XXy)".
-- Use this transposed layout whenever the table represents time-series data by year.
-- For other table types (e.g. rankings, client lists, segment breakdowns) use whatever layout is clearest.
-
-Always compute and print CAGR when you have 3+ years of data (use fractional N for partial years).
-Use pandas tabulate or manual string formatting — never raw DataFrame repr.
+Example printed output format:
+**Revenue by Segment**
+| €k | FY22 | FY23 | LTM24 | CAGR (N=2.25y) |
+|:---|---:|---:|---:|---:|
+| Segment A | 3,670.00 | 5,610.00 | 6,310.00 | 31.0% |
+| Segment B | 4,980.00 | 5,690.00 | 5,980.00 | 9.6% |
+| **Total** | **8,650.00** | **11,300.00** | **12,290.00** | **19.2%** |
+| **As % of Total** | | | | |
+| Segment A | *42.4%* | *49.6%* | *51.3%* | |
+| Segment B | *57.6%* | *50.4%* | *48.7%* | |
+Source: Company Dataset
 
 CURRENCY FORMAT — MANDATORY:
 All monetary values MUST use the euro symbol prefix with lowercase magnitude suffix.

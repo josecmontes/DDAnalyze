@@ -13,7 +13,6 @@ como es de esperar de productos de moda. Queremos entender mejor el negocio y lo
 Canal: nos dice el tipo de distribución.
 Venta Total: venta sin IVA.
 Ventas Tot: nuesta columna en € con IVA.
-Línea: los tipos de producto, creemos que hay 3 principales -> CITY, TRIBE y DISTRICT (confirmar)-
 Año fiscal: nos gusta ver números y crecimientos (CAGR por ejemplo) en base a los años fiscales.
 ]
 
