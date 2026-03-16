@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDAnalyze</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f0f0f;
+            --panel: #1a1a1a;
+            --panel-alt: #151515;
+            --border: #2a2a2a;
+            --primary: #26890D;
+            --primary-light: #3aad1a;
+            --primary-dim: #1d6a0a;
+            --accent: #0D8390;
+            --danger: #c0392b;
+            --text: #e0e0e0;
+            --text-muted: #888;
+            --text-dim: #555;
+            --success: #26890D;
+            --warning: #f39c12;
+            --radius: 6px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ───────────────────────────────────────────── */
+        .header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-shrink: 0;
+        }
+
+        .logo {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -0.5px;
+            white-space: nowrap;
+        }
+        .logo span { color: var(--text-muted); font-weight: 400; }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-left: auto;
+        }
+
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--text-dim);
+        }
+        .status-dot.active {
+            background: var(--primary);
+            animation: pulse 1.5s infinite;
+        }
+        .status-dot.complete { background: var(--success); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* ── Main Layout ──────────────────────────────────────── */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── Left Panel: Control + Progress ───────────────────── */
+        .left-panel {
+            width: 340px;
+            min-width: 280px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-alt);
+            flex-shrink: 0;
+        }
+
+        .panel-section {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-title {
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--primary);
+            margin-bottom: 12px;
+        }
+
+        /* Schedule Builder */
+        .schedule-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .schedule-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg);
+            padding: 8px 10px;
+            border-radius: var(--radius);
+            font-size: 0.82rem;
+        }
+
+        .schedule-item select,
+        .schedule-item input[type="number"] {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .schedule-item select { flex: 1; }
+        .schedule-item input[type="number"] { width: 50px; text-align: center; }
+
+        .schedule-item .remove-btn {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 0 4px;
+        }
+        .schedule-item .remove-btn:hover { color: var(--danger); }
+
+        .schedule-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 8px 14px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn-sm { padding: 5px 10px; font-size: 0.75rem; }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--primary-light); }
+        .btn-primary:disabled { background: var(--primary-dim); opacity: 0.5; cursor: not-allowed; }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover { background: var(--bg); color: var(--text); }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover { opacity: 0.85; }
+
+        .btn-block { width: 100%; }
+
+        /* Status Cards */
+        .status-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .status-card {
+            background: var(--bg);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+        }
+
+        .status-card .label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .status-card .value {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .status-card .detail {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        /* Log Feed */
+        .log-feed {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.72rem;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .log-feed .log-line { margin-bottom: 2px; word-break: break-word; }
+        .log-feed .log-line.error { color: var(--danger); }
+        .log-feed .log-line.success { color: var(--success); }
+
+        /* ── Center Panel: Chat ───────────────────────────────── */
+        .center-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            min-width: 0;
+        }
+
+        .chat-header {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--panel);
+        }
+
+        .chat-header h2 {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .tab-bar {
+            display: flex;
+            gap: 2px;
+            margin-left: auto;
+        }
+
+        .tab {
+            padding: 5px 12px;
+            font-size: 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--text-muted);
+            background: transparent;
+            border: none;
+            transition: all 0.15s;
+        }
+        .tab:hover { color: var(--text); background: var(--bg); }
+        .tab.active { color: var(--primary); background: rgba(38,137,13,0.1); }
+
+        /* Chat Messages */
+        .chat-window {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 0.88rem;
+            line-height: 1.55;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: var(--primary);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.system {
+            align-self: center;
+            background: rgba(13,131,144,0.1);
+            border: 1px solid rgba(13,131,144,0.2);
+            color: var(--accent);
+            font-size: 0.8rem;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        .message h1, .message h2, .message h3 { margin: 8px 0 4px; }
+        .message h1 { font-size: 1.1rem; }
+        .message h2 { font-size: 1rem; }
+        .message h3 { font-size: 0.92rem; }
+        .message p { margin: 4px 0; }
+        .message ul, .message ol { margin: 4px 0 4px 20px; }
+        .message code {
+            background: rgba(0,0,0,0.3);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 0.82rem;
+        }
+        .message pre {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin: 6px 0;
+        }
+        .message pre code { background: none; padding: 0; }
+        .message table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 0.82rem; }
+        .message th, .message td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+        .message th { background: var(--bg); }
+        .message strong { color: var(--primary-light); }
+        .message hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+        .typing-indicator {
+            align-self: flex-start;
+            padding: 12px 16px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            border-bottom-left-radius: 4px;
+            display: none;
+        }
+        .typing-indicator.visible { display: flex; gap: 4px; }
+        .typing-indicator span {
+            width: 6px; height: 6px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.2s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+
+        /* Chat Input */
+        .chat-input-area {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--panel);
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input-area textarea {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 14px;
+            border-radius: 20px;
+            font-size: 0.88rem;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            max-height: 120px;
+            min-height: 40px;
+            line-height: 1.4;
+        }
+        .chat-input-area textarea:focus { border-color: var(--primary); }
+        .chat-input-area textarea::placeholder { color: var(--text-dim); }
+
+        .send-btn {
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            background: var(--primary);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .send-btn:hover { background: var(--primary-light); }
+        .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .send-btn svg { width: 18px; height: 18px; fill: white; }
+
+        /* ── Right Panel: Reports/Graphs ──────────────────────── */
+        .right-panel {
+            width: 360px;
+            min-width: 280px;
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-alt);
+            flex-shrink: 0;
+        }
+
+        .right-panel .panel-section { overflow-y: auto; }
+
+        .report-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--bg);
+            border-radius: var(--radius);
+            margin-bottom: 6px;
+            text-decoration: none;
+            color: var(--text);
+            font-size: 0.82rem;
+            transition: all 0.15s;
+            cursor: pointer;
+        }
+        .report-link:hover { background: var(--panel); border-left: 2px solid var(--primary); }
+
+        .report-link .icon {
+            width: 32px; height: 32px;
+            border-radius: 4px;
+            background: rgba(38,137,13,0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+        }
+
+        .report-link .info { flex: 1; }
+        .report-link .info .name { font-weight: 500; }
+        .report-link .info .meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
+
+        .graphs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .graph-thumb {
+            background: var(--bg);
+            border-radius: var(--radius);
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .graph-thumb:hover { outline: 2px solid var(--primary); }
+        .graph-thumb img {
+            width: 100%;
+            height: 80px;
+            object-fit: cover;
+            display: block;
+        }
+        .graph-thumb .graph-name {
+            padding: 4px 6px;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .quick-action {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--bg);
+            border-radius: var(--radius);
+            cursor: pointer;
+            border: none;
+            color: var(--text);
+            font-size: 0.8rem;
+            text-align: left;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .quick-action:hover { background: var(--panel); border-left: 2px solid var(--accent); }
+        .quick-action .qa-icon { color: var(--accent); font-size: 1rem; width: 20px; text-align: center; }
+
+        /* ── Overlay / Modal ──────────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.visible { display: flex; }
+
+        .modal {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow: auto;
+            padding: 20px;
+        }
+        .modal img { max-width: 100%; }
+        .modal .close-btn {
+            position: absolute; top: 10px; right: 10px;
+            background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); border-radius: 50%;
+            width: 30px; height: 30px; cursor: pointer;
+            font-size: 1rem; display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+        /* Responsive */
+        @media (max-width: 1100px) {
+            .right-panel { display: none; }
+        }
+        @media (max-width: 800px) {
+            .left-panel { width: 260px; min-width: 200px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<div class="header">
+    <div class="logo">DDAnalyze <span>Due Diligence Platform</span></div>
+    <div class="header-status">
+        <div class="status-dot" id="globalStatusDot"></div>
+        <span id="globalStatusText">Idle</span>
+    </div>
+</div>
+
+<!-- ── Main Layout ─────────────────────────────────────────────── -->
+<div class="main">
+
+    <!-- Left Panel: Schedule + Status + Log -->
+    <div class="left-panel">
+
+        <!-- Schedule Builder -->
+        <div class="panel-section">
+            <div class="panel-title">Analysis Schedule</div>
+            <div class="schedule-list" id="scheduleList">
+                <div class="schedule-item">
+                    <select><option value="data_analysis">Data Analysis</option><option value="web_research">Web Research</option><option value="report">Report</option><option value="deloitte_report">Deloitte Report</option></select>
+                    <input type="number" value="5" min="1" max="50">
+                    <button class="remove-btn" onclick="removeScheduleItem(this)">&times;</button>
+                </div>
+                <div class="schedule-item">
+                    <select><option value="web_research">Web Research</option><option value="data_analysis">Data Analysis</option><option value="report">Report</option><option value="deloitte_report">Deloitte Report</option></select>
+                    <input type="number" value="3" min="1" max="50">
+                    <button class="remove-btn" onclick="removeScheduleItem(this)">&times;</button>
+                </div>
+                <div class="schedule-item">
+                    <select><option value="data_analysis">Data Analysis</option><option value="web_research">Web Research</option><option value="report">Report</option><option value="deloitte_report">Deloitte Report</option></select>
+                    <input type="number" value="5" min="1" max="50">
+                    <button class="remove-btn" onclick="removeScheduleItem(this)">&times;</button>
+                </div>
+                <div class="schedule-item">
+                    <select><option value="report">Report</option><option value="data_analysis">Data Analysis</option><option value="web_research">Web Research</option><option value="deloitte_report">Deloitte Report</option></select>
+                    <input type="number" value="0" min="0" max="50" disabled>
+                    <button class="remove-btn" onclick="removeScheduleItem(this)">&times;</button>
+                </div>
+            </div>
+            <div class="schedule-actions">
+                <button class="btn btn-ghost btn-sm" onclick="addScheduleItem()">+ Add Phase</button>
+                <button class="btn btn-primary btn-sm" id="btnLaunch" onclick="launchPipeline()" style="margin-left:auto;">Launch</button>
+                <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelPipeline()" style="display:none;">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div class="panel-section">
+            <div class="panel-title">Status</div>
+            <div class="status-grid">
+                <div class="status-card">
+                    <div class="label">Analyses</div>
+                    <div class="value" id="statAnalyses">0</div>
+                    <div class="detail" id="statAnalysesDetail">Not started</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Web Research</div>
+                    <div class="value" id="statResearch">0</div>
+                    <div class="detail">iterations</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Charts</div>
+                    <div class="value" id="statGraphs">0</div>
+                    <div class="detail">generated</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Reports</div>
+                    <div class="value" id="statReports">0</div>
+                    <div class="detail" id="statReportsDetail">none</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Log -->
+        <div class="panel-title" style="padding: 12px 16px 0;">Live Log</div>
+        <div class="log-feed" id="logFeed">
+            <div class="log-line" style="color:var(--text-dim);">Waiting for activity...</div>
+        </div>
+    </div>
+
+    <!-- Center: Chat -->
+    <div class="center-panel">
+        <div class="chat-header">
+            <h2>Assistant</h2>
+            <div class="tab-bar">
+                <button class="tab active" onclick="switchTab('chat', this)">Chat</button>
+                <button class="tab" onclick="switchTab('context', this)">Context</button>
+                <button class="tab" onclick="switchTab('report', this)">Report</button>
+            </div>
+        </div>
+
+        <!-- Chat View -->
+        <div class="chat-window" id="chatWindow">
+            <div class="message assistant">
+                <strong>Welcome to DDAnalyze.</strong><br><br>
+                Configure your analysis schedule on the left and click <strong>Launch</strong> to begin.<br><br>
+                Once analysis completes, you can ask me questions about the findings, request corrections, or trigger additional analysis.<br><br>
+                <em>Quick commands:</em> <code>/analyze 5</code>, <code>/research 3</code>, <code>/report</code>, <code>/deloitte</code>, <code>/export-all</code>, <code>/databook</code>
+            </div>
+        </div>
+
+        <!-- Context View (hidden by default) -->
+        <div class="chat-window" id="contextWindow" style="display:none;">
+            <div class="message system">Loading knowledge bases...</div>
+        </div>
+
+        <!-- Report View (hidden by default) -->
+        <div class="chat-window" id="reportWindow" style="display:none;">
+            <div class="message system">No report generated yet. Run the pipeline first.</div>
+        </div>
+
+        <div class="typing-indicator" id="typingIndicator">
+            <span></span><span></span><span></span>
+        </div>
+
+        <div class="chat-input-area">
+            <textarea id="chatInput" placeholder="Ask about the analysis, request corrections, or type a command..." rows="1" autocomplete="off"></textarea>
+            <button class="send-btn" id="btnSend" onclick="sendMessage()">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Right Panel: Reports + Graphs + Quick Actions -->
+    <div class="right-panel">
+        <div class="panel-section">
+            <div class="panel-title">Reports</div>
+            <div id="reportsList">
+                <div style="font-size:0.8rem; color:var(--text-dim);">No reports yet</div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-title">Charts</div>
+            <div class="graphs-grid" id="graphsGrid">
+                <div style="font-size:0.8rem; color:var(--text-dim); grid-column:1/-1;">No charts yet</div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-title">Quick Actions</div>
+            <div class="quick-actions">
+                <button class="quick-action" onclick="quickAction('analyze', 5)">
+                    <span class="qa-icon">&#9654;</span>
+                    <span>Run 5 Data Analyses</span>
+                </button>
+                <button class="quick-action" onclick="quickAction('research', 3)">
+                    <span class="qa-icon">&#127760;</span>
+                    <span>Run 3 Web Researches</span>
+                </button>
+                <button class="quick-action" onclick="quickAction('report', 0)">
+                    <span class="qa-icon">&#128196;</span>
+                    <span>Generate Report</span>
+                </button>
+                <button class="quick-action" onclick="quickAction('deloitte', 0)">
+                    <span class="qa-icon">&#9733;</span>
+                    <span>Deloitte Premium Report</span>
+                </button>
+                <button class="quick-action" onclick="sendCommand('/export-all')">
+                    <span class="qa-icon">&#128229;</span>
+                    <span>Export All to Excel</span>
+                </button>
+                <button class="quick-action" onclick="sendCommand('/databook')">
+                    <span class="qa-icon">&#128218;</span>
+                    <span>Generate Databook</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal for graph preview -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+        <img id="modalImage" src="" alt="Graph">
+    </div>
+</div>
+
+<script>
+    // ── State ────────────────────────────────────────────────
+    let chatHistory = [];
+    let pendingGuidance = null;
+    let isWaitingForResponse = false;
+    let currentTab = 'chat';
+
+    // ── SSE Connection ───────────────────────────────────────
+    let eventSource = null;
+
+    function connectSSE() {
+        eventSource = new EventSource('/api/events');
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'status') {
+                updateStatusUI(data);
+            } else if (data.type === 'log') {
+                appendLog(data.message, data.level);
+            } else if (data.type === 'pipeline') {
+                if (data.status === 'started') {
+                    setPipelineRunning(true);
+                    appendChatSystem('Pipeline started.');
+                } else if (data.status === 'complete') {
+                    setPipelineRunning(false);
+                    appendChatSystem('Pipeline complete. You can now ask questions about the results.');
+                    refreshStatus();
+                    refreshReports();
+                    refreshGraphs();
+                }
+            } else if (data.type === 'phase') {
+                appendLog(`Phase ${data.current}/${data.total}: ${data.phase}`, 'info');
+            }
+        };
+
+        eventSource.onerror = function() {
+            setTimeout(connectSSE, 3000);
+        };
+    }
+
+    connectSSE();
+
+    // ── UI Updates ───────────────────────────────────────────
+    function updateStatusUI(data) {
+        if (data.data_analysis) {
+            document.getElementById('statAnalyses').textContent = data.data_analysis.success || 0;
+            const total = data.data_analysis.total || 0;
+            const failed = data.data_analysis.failed || 0;
+            document.getElementById('statAnalysesDetail').textContent =
+                total > 0 ? `${total} total, ${failed} failed` : 'Not started';
+        }
+        if (data.web_research) {
+            document.getElementById('statResearch').textContent = data.web_research.total || 0;
+        }
+        if (data.graphs !== undefined) {
+            document.getElementById('statGraphs').textContent = data.graphs;
+        }
+        if (data.reports) {
+            const count = Object.keys(data.reports).length;
+            document.getElementById('statReports').textContent = count;
+            document.getElementById('statReportsDetail').textContent =
+                count > 0 ? Object.keys(data.reports).join(', ') : 'none';
+        }
+        if (data.pipeline) {
+            setPipelineRunning(data.pipeline.running);
+        }
+    }
+
+    function setPipelineRunning(running) {
+        const dot = document.getElementById('globalStatusDot');
+        const text = document.getElementById('globalStatusText');
+        const btnLaunch = document.getElementById('btnLaunch');
+        const btnCancel = document.getElementById('btnCancel');
+
+        if (running) {
+            dot.className = 'status-dot active';
+            text.textContent = 'Running...';
+            btnLaunch.style.display = 'none';
+            btnCancel.style.display = 'inline-block';
+        } else {
+            dot.className = 'status-dot complete';
+            text.textContent = 'Ready';
+            btnLaunch.style.display = 'inline-block';
+            btnCancel.style.display = 'none';
+        }
+    }
+
+    function appendLog(msg, level) {
+        const feed = document.getElementById('logFeed');
+        // Remove placeholder
+        if (feed.children.length === 1 && feed.children[0].textContent.includes('Waiting')) {
+            feed.innerHTML = '';
+        }
+        const div = document.createElement('div');
+        div.className = 'log-line' + (level === 'error' ? ' error' : '') + (msg.includes('success') || msg.includes('Complete') ? ' success' : '');
+        div.textContent = msg;
+        feed.appendChild(div);
+        feed.scrollTop = feed.scrollHeight;
+
+        // Keep max 500 lines
+        while (feed.children.length > 500) feed.removeChild(feed.firstChild);
+    }
+
+    // ── Schedule Builder ─────────────────────────────────────
+    function addScheduleItem() {
+        const list = document.getElementById('scheduleList');
+        const div = document.createElement('div');
+        div.className = 'schedule-item';
+        div.innerHTML = `
+            <select>
+                <option value="data_analysis">Data Analysis</option>
+                <option value="web_research">Web Research</option>
+                <option value="report">Report</option>
+                <option value="deloitte_report">Deloitte Report</option>
+            </select>
+            <input type="number" value="5" min="1" max="50">
+            <button class="remove-btn" onclick="removeScheduleItem(this)">&times;</button>
+        `;
+        list.appendChild(div);
+        // Add change listener for report types
+        div.querySelector('select').addEventListener('change', handleScheduleTypeChange);
+    }
+
+    function removeScheduleItem(btn) {
+        const list = document.getElementById('scheduleList');
+        if (list.children.length > 1) {
+            btn.parentElement.remove();
+        }
+    }
+
+    function handleScheduleTypeChange(e) {
+        const input = e.target.parentElement.querySelector('input[type="number"]');
+        if (e.target.value === 'report' || e.target.value === 'deloitte_report') {
+            input.value = 0;
+            input.disabled = true;
+        } else {
+            input.disabled = false;
+            if (input.value === '0') input.value = 5;
+        }
+    }
+
+    // Attach listeners to initial items
+    document.querySelectorAll('.schedule-item select').forEach(sel => {
+        sel.addEventListener('change', handleScheduleTypeChange);
+    });
+
+    function getSchedule() {
+        const items = document.querySelectorAll('#scheduleList .schedule-item');
+        const schedule = [];
+        items.forEach(item => {
+            const type = item.querySelector('select').value;
+            const iterations = parseInt(item.querySelector('input').value) || 0;
+            schedule.push({ type, iterations });
+        });
+        return schedule;
+    }
+
+    // ── Pipeline Control ─────────────────────────────────────
+    async function launchPipeline() {
+        const schedule = getSchedule();
+        if (schedule.length === 0) return;
+
+        try {
+            const resp = await fetch('/api/schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule })
+            });
+            const data = await resp.json();
+            if (data.error) {
+                appendChatSystem('Error: ' + data.error);
+            }
+        } catch (e) {
+            appendChatSystem('Failed to start pipeline: ' + e.message);
+        }
+    }
+
+    async function cancelPipeline() {
+        try {
+            await fetch('/api/cancel', { method: 'POST' });
+        } catch (e) {
+            appendChatSystem('Failed to cancel: ' + e.message);
+        }
+    }
+
+    // ── Quick Actions ────────────────────────────────────────
+    async function quickAction(type, iterations) {
+        const phaseMap = {
+            'analyze': 'data_analysis',
+            'research': 'web_research',
+            'report': 'report',
+            'deloitte': 'deloitte_report'
+        };
+
+        try {
+            const resp = await fetch('/api/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: phaseMap[type], iterations })
+            });
+            const data = await resp.json();
+            if (data.error) {
+                appendChatSystem('Error: ' + data.error);
+            }
+        } catch (e) {
+            appendChatSystem('Failed: ' + e.message);
+        }
+    }
+
+    // ── Chat ─────────────────────────────────────────────────
+    const chatInput = document.getElementById('chatInput');
+    const chatWindow = document.getElementById('chatWindow');
+    const typingIndicator = document.getElementById('typingIndicator');
+
+    chatInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // Auto-resize textarea
+    chatInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    function sendCommand(cmd) {
+        chatInput.value = cmd;
+        sendMessage();
+    }
+
+    async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text || isWaitingForResponse) return;
+
+        // Add to UI
+        appendChatMessage('user', text);
+        chatHistory.push({ role: 'user', content: text });
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+
+        isWaitingForResponse = true;
+        document.getElementById('btnSend').disabled = true;
+        typingIndicator.classList.add('visible');
+
+        try {
+            const resp = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text, history: chatHistory })
+            });
+            const data = await resp.json();
+
+            typingIndicator.classList.remove('visible');
+
+            if (data.text) {
+                appendChatMessage('assistant', data.text);
+                chatHistory.push({ role: 'assistant', content: data.text });
+            }
+
+            // If there's a guidance plan, show action button
+            if (data.guidance_plan) {
+                pendingGuidance = data.guidance_plan;
+                appendGuidanceAction(data.guidance_plan);
+            }
+
+            // Refresh status after actions
+            if (data.action) {
+                setTimeout(refreshStatus, 2000);
+            }
+        } catch (e) {
+            typingIndicator.classList.remove('visible');
+            appendChatMessage('assistant', 'Connection error. Please try again.');
+        } finally {
+            isWaitingForResponse = false;
+            document.getElementById('btnSend').disabled = false;
+        }
+    }
+
+    function appendChatMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = 'message ' + role;
+        div.innerHTML = marked.parse(text);
+        chatWindow.appendChild(div);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function appendChatSystem(text) {
+        const div = document.createElement('div');
+        div.className = 'message system';
+        div.textContent = text;
+        chatWindow.appendChild(div);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function appendGuidanceAction(plan) {
+        const div = document.createElement('div');
+        div.className = 'message system';
+        div.style.cursor = 'pointer';
+        div.innerHTML = `
+            <strong>Suggested action:</strong> ${plan.summary || 'Run additional analysis'}<br>
+            <span style="font-size:0.75rem; opacity:0.7;">Click here to execute this plan</span>
+        `;
+        div.onclick = async function() {
+            div.style.opacity = '0.5';
+            div.style.pointerEvents = 'none';
+            div.innerHTML += '<br><em>Executing...</em>';
+            try {
+                await fetch('/api/execute-guidance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(plan)
+                });
+            } catch (e) {
+                appendChatSystem('Failed to execute guidance: ' + e.message);
+            }
+        };
+        chatWindow.appendChild(div);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    // ── Tabs ─────────────────────────────────────────────────
+    function switchTab(tab, btn) {
+        currentTab = tab;
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+
+        document.getElementById('chatWindow').style.display = tab === 'chat' ? 'flex' : 'none';
+        document.getElementById('contextWindow').style.display = tab === 'context' ? 'flex' : 'none';
+        document.getElementById('reportWindow').style.display = tab === 'report' ? 'flex' : 'none';
+
+        if (tab === 'context') loadContext();
+        if (tab === 'report') loadReport();
+    }
+
+    async function loadContext() {
+        const win = document.getElementById('contextWindow');
+        try {
+            const resp = await fetch('/api/context');
+            const data = await resp.json();
+            win.innerHTML = '';
+
+            if (data.data_analysis) {
+                const div = document.createElement('div');
+                div.className = 'message assistant';
+                div.innerHTML = '<strong>Data Analysis Knowledge Base</strong><hr>' + marked.parse(data.data_analysis);
+                win.appendChild(div);
+            }
+            if (data.web_research) {
+                const div = document.createElement('div');
+                div.className = 'message assistant';
+                div.innerHTML = '<strong>Web Research Knowledge Base</strong><hr>' + marked.parse(data.web_research);
+                win.appendChild(div);
+            }
+            if (!data.data_analysis && !data.web_research) {
+                win.innerHTML = '<div class="message system">No analysis context available yet. Run the pipeline first.</div>';
+            }
+        } catch (e) {
+            win.innerHTML = '<div class="message system">Failed to load context.</div>';
+        }
+    }
+
+    async function loadReport() {
+        const win = document.getElementById('reportWindow');
+        try {
+            const resp = await fetch('/api/report/markdown');
+            if (!resp.ok) {
+                win.innerHTML = '<div class="message system">No report generated yet. Run the pipeline first.</div>';
+                return;
+            }
+            const text = await resp.text();
+            win.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.innerHTML = marked.parse(text);
+            win.appendChild(div);
+        } catch (e) {
+            win.innerHTML = '<div class="message system">Failed to load report.</div>';
+        }
+    }
+
+    // ── Reports & Graphs ─────────────────────────────────────
+    async function refreshReports() {
+        try {
+            const resp = await fetch('/api/status');
+            const data = await resp.json();
+            const list = document.getElementById('reportsList');
+            list.innerHTML = '';
+
+            const reports = data.reports || {};
+            if (Object.keys(reports).length === 0) {
+                list.innerHTML = '<div style="font-size:0.8rem; color:var(--text-dim);">No reports yet</div>';
+                return;
+            }
+
+            if (reports.markdown) {
+                list.innerHTML += `
+                    <a class="report-link" href="/api/report/markdown" target="_blank">
+                        <div class="icon">MD</div>
+                        <div class="info">
+                            <div class="name">Final Report (Markdown)</div>
+                            <div class="meta">${reports.markdown.size_kb} KB &middot; ${reports.markdown.modified}</div>
+                        </div>
+                    </a>`;
+            }
+            if (reports.docx) {
+                list.innerHTML += `
+                    <div class="report-link">
+                        <div class="icon">W</div>
+                        <div class="info">
+                            <div class="name">Final Report (Word)</div>
+                            <div class="meta">${reports.docx.size_kb} KB</div>
+                        </div>
+                    </div>`;
+            }
+            if (reports.deloitte) {
+                list.innerHTML += `
+                    <a class="report-link" href="/api/report/deloitte" target="_blank">
+                        <div class="icon" style="background:rgba(13,131,144,0.15); color:var(--accent);">H</div>
+                        <div class="info">
+                            <div class="name">Deloitte Premium Report</div>
+                            <div class="meta">${reports.deloitte.size_kb} KB &middot; ${reports.deloitte.modified}</div>
+                        </div>
+                    </a>`;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    async function refreshGraphs() {
+        try {
+            const resp = await fetch('/api/graphs');
+            const graphs = await resp.json();
+            const grid = document.getElementById('graphsGrid');
+
+            if (graphs.length === 0) {
+                grid.innerHTML = '<div style="font-size:0.8rem; color:var(--text-dim); grid-column:1/-1;">No charts yet</div>';
+                return;
+            }
+
+            grid.innerHTML = '';
+            graphs.slice(0, 20).forEach(name => {
+                const div = document.createElement('div');
+                div.className = 'graph-thumb';
+                div.onclick = () => showGraphModal(name);
+                div.innerHTML = `
+                    <img src="/graphs/${name}" alt="${name}" loading="lazy">
+                    <div class="graph-name">${name.replace('.png','').replaceAll('_',' ')}</div>
+                `;
+                grid.appendChild(div);
+            });
+        } catch (e) { /* ignore */ }
+    }
+
+    async function refreshStatus() {
+        try {
+            const resp = await fetch('/api/status');
+            const data = await resp.json();
+            updateStatusUI(data);
+        } catch (e) { /* ignore */ }
+    }
+
+    // ── Modal ────────────────────────────────────────────────
+    function showGraphModal(name) {
+        document.getElementById('modalImage').src = '/graphs/' + name;
+        document.getElementById('modalOverlay').classList.add('visible');
+    }
+
+    function closeModal() {
+        document.getElementById('modalOverlay').classList.remove('visible');
+    }
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    // ── Init ─────────────────────────────────────────────────
+    refreshStatus();
+    refreshReports();
+    refreshGraphs();
+
+    // Periodic refresh
+    setInterval(refreshStatus, 10000);
+    setInterval(refreshReports, 30000);
+    setInterval(refreshGraphs, 30000);
+</script>
+</body>
+</html>
