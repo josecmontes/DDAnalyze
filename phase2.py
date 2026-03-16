@@ -1173,6 +1173,7 @@ def main() -> None:
     model = config.get("model", "claude-sonnet-4-6")
     archive_path = config.get("archive_file", "full_archive.txt")
     context_path = config.get("active_context_file", "active_context.md")
+    web_context_path = config.get("web_research_context_file", "web_research_context.md")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
     debug_logging = config.get("debug_logging", False)
 
@@ -1185,9 +1186,10 @@ def main() -> None:
 
     logger.info("=" * 60)
     logger.info("Phase 2 — Final Report Generator (Iterative Pipeline)")
-    logger.info(f"Archive : {archive_path}")
-    logger.info(f"Context : {context_path}")
-    logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Archive     : {archive_path}")
+    logger.info(f"Context     : {context_path}")
+    logger.info(f"Web Context : {web_context_path}")
+    logger.info(f"Graphs      : {graphs_folder}")
     logger.info(f"Model   : {model}")
     logger.info(f"Log     : {log_file}")
     logger.info("=" * 60)
@@ -1200,6 +1202,10 @@ def main() -> None:
 
     archive_text = read_file(archive_path)
     context_text = read_file(context_path) if Path(context_path).exists() else ""
+    web_context_text = read_file(web_context_path) if Path(web_context_path).exists() else ""
+    if web_context_text:
+        context_text = context_text + "\n\n## Web Research Context\n" + web_context_text
+        logger.info(f"Web research context loaded ({len(web_context_text):,} chars)")
     logger.debug(
         f"[Input] archive={len(archive_text):,}ch  context={len(context_text):,}ch"
     )
