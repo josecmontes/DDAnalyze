@@ -10,12 +10,11 @@ como es de esperar de productos de moda. Queremos entender mejor el negocio y lo
 
 ## Dataset Description
 [Nombre Modelo: nos dice el producto especifico, hay algunos estables y creemos que otros más de moda
+Fecha_Mes: Fecha de la venta
 Canal: nos dice el tipo de distribución.
-Venta Total: venta sin IVA.
-Ventas Tot: nuesta columna en € con IVA.
-Año fiscal: nos gusta ver números y crecimientos (CAGR por ejemplo) en base a los años fiscales.
-
-Keep in mind that the clients column is used diferently for diferent channels: in Online there is only one "client" because it is sales through the website. for Retail every "client" is actually a phisical onwed store. The only time it is actually a client is for the Wholesale channel"
+Tienda_Cliente: Keep in mind that the clients column is used diferently for diferent channels: in Online there is only one "client" because it is sales through the website. For Retail every "client" is actually a phisical onwed store. The only time it is actually a client is for the Wholesale channel"
+Venta Netas: venta sin IVA. Si es negativo es por devoluciones o notas de crédito.
+Cant_Neta: Volumen unitario de ventas. Si es negativo es por devoluciones o notas de crédito.
 ]
 
 ## Analysis Catalog
