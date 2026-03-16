@@ -29,6 +29,7 @@ import anthropic
 import yaml
 
 from dotenv import load_dotenv
+from excel_export import export_iterations_to_excel, generate_databook
 
 load_dotenv()
 API_KEY = os.getenv('API_KEY')
@@ -690,6 +691,9 @@ INTERACTIVE_HELP = """
 ║                       e.g. /extract revenue by client by     ║
 ║                            year with all detail rows         ║
 ║                                                              ║
+║    /export-all        Export all iterations to Excel backup   ║
+║    /databook          Generate curated databook (by theme)   ║
+║                                                              ║
 ║    /analyze <N>       Run N more data analysis iterations    ║
 ║    /research <N>      Run N more web research iterations     ║
 ║    /report            Regenerate the report                  ║
@@ -828,6 +832,40 @@ def interactive_loop(client: anthropic.Anthropic, model: str, config: dict) -> N
             parts = user_input.split()
             n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
             run_web_research(n)
+            continue
+
+        elif user_input.lower() == "/export-all":
+            archive_path = config.get("archive_file", "full_archive.txt")
+            context_path = config["active_context_file"]
+            graphs_folder = config.get("graphs_folder", "workspace/graphs")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"workspace/exports/iterations_export_{timestamp}.xlsx"
+
+            print("\nExporting all iterations to Excel...")
+            result = export_iterations_to_excel(
+                archive_path, context_path, output_path, graphs_folder
+            )
+            if result:
+                print(f"\nExport complete: {result}")
+            else:
+                print("\nExport failed. Check the log for details.")
+            continue
+
+        elif user_input.lower() == "/databook":
+            archive_path = config.get("archive_file", "full_archive.txt")
+            context_path = config["active_context_file"]
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"workspace/exports/databook_{timestamp}.xlsx"
+            max_tokens = config.get("databook_max_tokens", 20000)
+
+            print("\nGenerating curated databook (this may take a minute)...")
+            result = generate_databook(
+                client, model, archive_path, context_path, output_path, max_tokens
+            )
+            if result:
+                print(f"\nDatabook created: {result}")
+            else:
+                print("\nDatabook generation failed. Check the log for details.")
             continue
 
         elif user_input.lower().startswith("/extract"):
