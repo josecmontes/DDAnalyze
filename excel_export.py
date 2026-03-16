@@ -476,49 +476,197 @@ def parse_json_response(text: str) -> Optional[dict]:
     return None
 
 
-# ─── Databook Generator ─────────────────────────────────────────────────────
+# ─── Databook Generator (Two-Stage Pipeline) ─────────────────────────────────
+#
+# Stage 1 (Planner): Reads condensed findings + column info → returns a JSON
+#          blueprint listing sheets, their contents, and the data transformations
+#          needed. Small output (~2K tokens).
+#
+# Stage 2 (Coder):   Receives the blueprint + column schema → writes one
+#          self-contained Python script that creates all sheets. Focused prompt
+#          keeps output within token budget.
+#
 
-DATABOOK_SYSTEM_PROMPT = """You are a financial due diligence data specialist. Your task is to create a
-structured "databook" — a polished Excel workbook that organizes analysis results into clean,
-stakeholder-ready data tables.
+DATABOOK_PLANNER_PROMPT = """You are a financial due diligence data specialist planning a "databook" —
+a polished multi-sheet Excel workbook organized by business theme.
 
 You will receive:
-- The archive of all successful analysis iterations (code + output + evaluation)
-- The active knowledge base with established facts
+- A summary of all successful analysis iterations (type, hypothesis, key output tables)
+- Column names and dtypes from the raw dataset
+- The established facts from the knowledge base
 
-Your job:
-1. Review all successful iterations and their outputs
-2. Write Python code that creates a multi-sheet Excel workbook organized by BUSINESS THEME
-   (not by iteration number)
-
-The databook should contain sheets like:
-- "Executive Summary" — key metrics, headline numbers, date range
-- "Revenue Overview" — revenue by year, channel, product (pivot tables)
-- "Client Analysis" — top clients, concentration, new vs returning
-- "Product Analysis" — product mix, top SKUs, category breakdown
-- "Trends & Seasonality" — time series data, growth rates, CAGR
-- "Risk Metrics" — concentration indices, dependency ratios
-- Any other themes that emerge from the data
-
-Rules for the code:
-- Import pandas and openpyxl
-- Load data from: df = pd.read_excel("workspace/data.xlsx")
-- Save to the path provided as the output file
-- Use pd.ExcelWriter with openpyxl engine
-- Create well-structured tables with clear headers
-- Include computed metrics (totals, percentages, growth rates, CAGR)
-- Format currency as € with appropriate suffixes (€k, €m)
-- Each sheet should be self-contained and understandable
-- Print the file path and sheet names after saving
-- Be self-contained (no imports from project modules except standard libs)
+Design a databook blueprint. Choose 4-7 sheets that best represent the analysis findings.
+Each sheet should correspond to a BUSINESS THEME (not an iteration number).
 
 Return ONLY a JSON object:
 {
-  "description": "What this databook contains",
-  "sheets": ["sheet1", "sheet2", ...],
+  "description": "One-line description of the databook",
+  "sheets": [
+    {
+      "name": "Sheet Name (max 31 chars)",
+      "purpose": "What this sheet shows",
+      "tables": ["table 1 description", "table 2 description"],
+      "metrics": ["metric 1", "metric 2"],
+      "relevant_columns": ["col1", "col2"]
+    }
+  ]
+}
+No preamble. No markdown fences."""
+
+DATABOOK_CODER_PROMPT = """You are a Python data engineer. Write a SINGLE self-contained Python script
+that creates a multi-sheet Excel databook.
+
+CRITICAL RULES:
+- Import only pandas, openpyxl, and standard libraries
+- Load data: df = pd.read_excel("workspace/data.xlsx")
+- Save to the EXACT path provided (use pd.ExcelWriter with openpyxl engine)
+- Keep the code COMPACT — avoid verbose formatting/styling code
+- Use simple column headers and clean numeric formatting
+- For currency, divide large numbers and add column suffix like "Revenue (€k)" or "Revenue (€m)"
+- Print the output file path and sheet names when done
+- Do NOT import any project modules
+
+You will receive:
+- The databook blueprint (sheets, their purpose, metrics)
+- The dataset column names and dtypes
+- Sample output from relevant analyses (to understand data patterns)
+
+Return ONLY a JSON object:
+{
   "code": "full Python code"
 }
 No preamble. No markdown fences around the JSON."""
+
+
+def _build_condensed_context(entries: list, context_text: str, data_file: str) -> tuple:
+    """
+    Build compact representations of the analysis results and dataset schema.
+    Returns (analyses_summary: str, column_info: str).
+    """
+    # Get column info from the actual data file
+    column_info = "(column info unavailable)"
+    try:
+        df_sample = pd.read_excel(data_file, nrows=5)
+        col_lines = []
+        for col in df_sample.columns:
+            dtype = str(df_sample[col].dtype)
+            sample = str(df_sample[col].iloc[0]) if len(df_sample) > 0 else ""
+            col_lines.append(f"  {col} ({dtype}): e.g. {sample}")
+        column_info = f"Columns ({len(df_sample.columns)}):\n" + "\n".join(col_lines)
+    except Exception as e:
+        logger.warning(f"[Databook] Could not read data file for schema: {e}")
+
+    # Build condensed iteration summaries — OUTPUT only (no code), truncated
+    analyses_parts = []
+    for e in entries:
+        eval_fields = _parse_evaluation_fields(e.get("evaluation", ""))
+        findings = eval_fields.get("key_findings", [])
+        findings_str = ("\n".join(f"  - {f}" for f in findings)) if findings else "(none)"
+
+        # Include output tables but cap at 1500 chars to keep prompt manageable
+        output_preview = e.get("output", "")[:1500]
+
+        analyses_parts.append(
+            f"--- Iter {e.get('iteration', '?')}: {e.get('analysis_type', 'unknown')} ---\n"
+            f"Hypothesis: {e.get('hypothesis', '')}\n"
+            f"Columns: {e.get('columns_used', '')}\n"
+            f"Key findings:\n{findings_str}\n"
+            f"Output preview:\n{output_preview}\n"
+        )
+
+    analyses_summary = "\n".join(analyses_parts)
+
+    return analyses_summary, column_info
+
+
+def _run_script_with_retry(
+    client: anthropic.Anthropic,
+    model: str,
+    code: str,
+    script_path: str,
+    output_path: str,
+    coder_context: str,
+    max_tokens: int,
+) -> str:
+    """Execute the databook script, retry once via LLM on error. Returns output path or ''."""
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    for attempt in range(1, 3):
+        write_file(script_path, code)
+        logger.info(f"  [Databook] Running code (attempt {attempt})...")
+
+        try:
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("[Databook] Code execution timed out")
+            return ""
+
+        if result.stdout:
+            logger.info(f"  [Databook] stdout:\n{result.stdout}")
+
+        if not result.stderr:
+            # Success — check file
+            if Path(output_path).exists():
+                size_kb = Path(output_path).stat().st_size / 1024
+                logger.info(f"  [Databook] SUCCESS — {output_path} ({size_kb:.1f} KB)")
+                return output_path
+            # Maybe saved with slightly different name
+            parent = Path(output_path).parent
+            xlsx_files = list(parent.glob("*.xlsx"))
+            if xlsx_files:
+                latest = max(xlsx_files, key=lambda p: p.stat().st_mtime)
+                size_kb = latest.stat().st_size / 1024
+                logger.info(f"  [Databook] SUCCESS — {latest} ({size_kb:.1f} KB)")
+                return str(latest)
+            logger.error("  [Databook] No Excel file was created")
+            return ""
+
+        # Error — retry once
+        if attempt >= 2:
+            logger.error(f"  [Databook] Final error:\n{result.stderr}")
+            return ""
+
+        logger.warning(f"  [Databook] Error:\n{result.stderr[:500]}")
+        logger.info("  [Databook] Asking LLM to fix...")
+
+        retry_msg = f"""The databook code produced an error. Fix it.
+
+## Code
+```python
+{code}
+```
+
+## Error
+{result.stderr}
+
+## stdout
+{result.stdout[:1000] if result.stdout else '(none)'}
+
+## Output File Path
+{output_path}
+
+Return ONLY a JSON object: {{"code": "fixed Python code"}}"""
+
+        retry_response = call_llm(
+            client, DATABOOK_CODER_PROMPT, retry_msg, model, max_tokens, tag="DatabookFix"
+        )
+        retry_parsed = parse_json_response(retry_response)
+        if retry_parsed and retry_parsed.get("code"):
+            code = retry_parsed["code"]
+        else:
+            logger.error("  [Databook] Failed to parse fix response")
+            return ""
+
+    return ""
 
 
 def generate_databook(
@@ -530,10 +678,9 @@ def generate_databook(
     max_tokens: int = 20000,
 ) -> str:
     """
-    Use the LLM to generate a curated databook Excel file organized by business theme.
-
-    The LLM reads all successful iterations, understands what data is available,
-    and writes Python code that creates a polished multi-sheet workbook.
+    Two-stage databook generation:
+      Stage 1 (Planner): LLM designs sheet blueprint from condensed findings
+      Stage 2 (Coder):   LLM writes compact Python code to create all sheets
 
     Returns the path of the created Excel file, or empty string on failure.
     """
@@ -549,149 +696,107 @@ def generate_databook(
         logger.error("[Databook] No successful analyses in archive.")
         return ""
 
-    # Read active context for established facts
     context_text = ""
     if Path(context_path).exists():
         context_text = read_file(context_path)
 
-    # Build condensed view of successful analyses
-    analyses_summary = []
-    for e in success_entries:
-        analyses_summary.append(
-            f"--- Iteration {e.get('iteration', '?')}: {e.get('analysis_type', 'unknown')} ---\n"
-            f"Hypothesis: {e.get('hypothesis', '')}\n"
-            f"Columns: {e.get('columns_used', '')}\n"
-            f"Code:\n{e.get('code', '')}\n"
-            f"Output:\n{e.get('output', '')[:2000]}\n"
-        )
+    data_file = "workspace/data.xlsx"
+    analyses_summary, column_info = _build_condensed_context(
+        success_entries, context_text, data_file
+    )
 
-    user_msg = f"""## Task
-Create a comprehensive databook Excel file that organizes all analysis findings into
-clean, theme-based sheets suitable for stakeholder review.
+    # ── Stage 1: Plan the databook ───────────────────────────────────────
+    logger.info(f"[Databook] Stage 1 — Planning from {len(success_entries)} successful iterations...")
+
+    planner_msg = f"""## Successful Analyses ({len(success_entries)} iterations)
+{analyses_summary}
+
+## Dataset Schema
+{column_info}
+
+## Established Facts (from knowledge base)
+{context_text[:4000]}
+
+Design a databook with 4-7 thematic sheets based on the analyses above."""
+
+    planner_response = call_llm(
+        client, DATABOOK_PLANNER_PROMPT, planner_msg, model, 4000, tag="DatabookPlan"
+    )
+
+    blueprint = parse_json_response(planner_response)
+    if blueprint is None:
+        logger.error("[Databook] Failed to parse blueprint from planner")
+        return ""
+
+    sheet_plans = blueprint.get("sheets", [])
+    logger.info(f"  [Databook] Blueprint: {blueprint.get('description', '')}")
+    for sp in sheet_plans:
+        logger.info(f"    Sheet: {sp.get('name', '?')} — {sp.get('purpose', '')[:80]}")
+
+    # ── Stage 2: Generate code ───────────────────────────────────────────
+    logger.info("[Databook] Stage 2 — Generating code...")
+
+    # Build a focused coder prompt with blueprint + schema + sample outputs
+    # Only include output previews for iterations relevant to the blueprint
+    relevant_iters = set()
+    for sp in sheet_plans:
+        for col in sp.get("relevant_columns", []):
+            for e in success_entries:
+                if col.lower() in e.get("columns_used", "").lower():
+                    relevant_iters.add(e.get("iteration", ""))
+
+    # If no specific matches, include all
+    if not relevant_iters:
+        relevant_iters = {e.get("iteration", "") for e in success_entries}
+
+    sample_outputs = []
+    for e in success_entries:
+        if e.get("iteration", "") in relevant_iters:
+            sample_outputs.append(
+                f"--- Iter {e.get('iteration')}: {e.get('analysis_type', '')} ---\n"
+                f"Columns: {e.get('columns_used', '')}\n"
+                f"Output:\n{e.get('output', '')[:1200]}\n"
+            )
+
+    blueprint_json = json.dumps(sheet_plans, indent=2)
+
+    coder_msg = f"""## Databook Blueprint
+{blueprint_json}
 
 ## Output File Path
 {output_path}
 
-## Successful Analyses ({len(success_entries)} iterations)
-{chr(10).join(analyses_summary)}
+## Dataset Schema
+{column_info}
 
-## Knowledge Base (Established Facts)
-{context_text[:6000]}
+## Sample Analysis Outputs (for reference)
+{chr(10).join(sample_outputs[:8])}
 
-## Data File
-Path: workspace/data.xlsx
+Write a single Python script that creates ALL sheets from the blueprint above.
+Keep it compact — focus on data transformations, not Excel styling."""
 
-Write Python code that creates a polished databook with thematic sheets. Each sheet should
-contain well-formatted tables with business-relevant metrics derived from the raw data.
-Re-run the actual data transformations (don't just copy printed output) to ensure accuracy."""
-
-    logger.info(f"[Databook] Generating databook from {len(success_entries)} successful iterations...")
-
-    response = call_llm(
-        client, DATABOOK_SYSTEM_PROMPT, user_msg, model, max_tokens, tag="Databook"
+    coder_response = call_llm(
+        client, DATABOOK_CODER_PROMPT, coder_msg, model, max_tokens, tag="DatabookCode"
     )
 
-    parsed = parse_json_response(response)
-    if parsed is None:
-        logger.error("[Databook] Failed to parse databook plan from LLM")
+    coder_parsed = parse_json_response(coder_response)
+    if coder_parsed is None:
+        logger.error("[Databook] Failed to parse code from coder")
         return ""
 
-    description = parsed.get("description", "Analysis databook")
-    sheets = parsed.get("sheets", [])
-    code = parsed.get("code", "")
-
-    logger.info(f"  [Databook] Description: {description}")
-    logger.info(f"  [Databook] Planned sheets: {sheets}")
+    code = coder_parsed.get("code", "")
+    if not code:
+        logger.error("[Databook] Coder returned empty code")
+        return ""
 
     # Ensure output directory exists
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Write and execute the databook generation code
+    # ── Execute with retry ───────────────────────────────────────────────
     script_path = "workspace/databook_script.py"
-    write_file(script_path, code)
-
-    logger.info("  [Databook] Running databook generation code...")
-
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-
-    max_attempts = 2
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = subprocess.run(
-                [sys.executable, script_path],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                timeout=180,
-            )
-
-            if result.stdout:
-                logger.info(f"  [Databook] Output:\n{result.stdout}")
-
-            if result.stderr and attempt < max_attempts:
-                logger.warning(f"  [Databook] Error (attempt {attempt}):\n{result.stderr}")
-                logger.info("  [Databook] Asking LLM to fix the code...")
-
-                retry_msg = f"""The databook code produced an error. Fix it.
-
-## Original Code
-```python
-{code}
-```
-
-## Error
-{result.stderr}
-
-## stdout (if any)
-{result.stdout}
-
-## Output File Path
-{output_path}
-
-Return the same JSON format with corrected code."""
-
-                retry_response = call_llm(
-                    client, DATABOOK_SYSTEM_PROMPT, retry_msg, model, max_tokens, tag="DatabookRetry"
-                )
-                retry_parsed = parse_json_response(retry_response)
-                if retry_parsed and retry_parsed.get("code"):
-                    code = retry_parsed["code"]
-                    write_file(script_path, code)
-                    continue
-                else:
-                    logger.error("  [Databook] Failed to parse retry response")
-                    return ""
-
-            elif result.stderr:
-                logger.error(f"  [Databook] Final error:\n{result.stderr}")
-                return ""
-
-            # Check if file was created
-            if Path(output_path).exists():
-                size_kb = Path(output_path).stat().st_size / 1024
-                logger.info(f"  [Databook] SUCCESS — {output_path} ({size_kb:.1f} KB)")
-                return output_path
-
-            # Check for any xlsx in the expected directory
-            parent = Path(output_path).parent
-            xlsx_files = list(parent.glob("*.xlsx"))
-            if xlsx_files:
-                latest = max(xlsx_files, key=lambda p: p.stat().st_mtime)
-                size_kb = latest.stat().st_size / 1024
-                logger.info(f"  [Databook] SUCCESS — {latest} ({size_kb:.1f} KB)")
-                return str(latest)
-
-            logger.error("  [Databook] No Excel file was created")
-            return ""
-
-        except subprocess.TimeoutExpired:
-            logger.error("[Databook] Code execution timed out")
-            return ""
-
-    return ""
+    return _run_script_with_retry(
+        client, model, code, script_path, output_path, coder_msg, max_tokens
+    )
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
