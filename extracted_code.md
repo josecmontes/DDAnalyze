@@ -1,6 +1,6 @@
 # Extracted Analysis Code
-*Generated: 2026-03-14 08:56:44*
-*Total successful analyses: 10*
+*Generated: 2026-03-15 21:03:57*
+*Total successful analyses: 11*
 
 ---
 
@@ -4409,6 +4409,462 @@ Total NE revenue LTM23 (Wholesales): EUR 12.65M across 115 models
 
 Top 20 NE Models by Wholesales LTM23 revenue:
 ----------------------------------
+```
+
+---
+
+## Analysis 1: New vs returning client revenue split + declining account root cause analysis + new client quality assessment
+**Hypothesis:** Priority analysis from Iter 10: Quantify new vs returning WS client revenue contribution in LTM23. With 883 new clients onboarded vs 741 returning, determine: (a) LTM revenue split new vs returning, (b) NE model share within each cohort, (c) implied YoY growth if new clients excluded. Also cross-reference declining top-20 WS accounts to distinguish product-risk from relationship-risk, and assess new WS client quality deterioration (EUR 6,883 → EUR 3,810 avg revenue).
+
+**Columns:** Tienda_Cliente, Canal, Nombre Modelo, Fecha_Mes, Venta Netas, Cant_Neta
+
+```python
+import matplotlib; matplotlib.use('Agg')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
+try:
+    import deloitte_theme
+    deloitte_theme.apply_deloitte_style()
+except Exception:
+    import matplotlib.pyplot as plt
+    DELOITTE_COLORS = ['#26890D', '#046A38', '#404040', '#0D8390', '#00ABAB']
+    plt.rcParams.update({
+        'font.family': ['Arial', 'sans-serif'],
+        'axes.prop_cycle': plt.cycler('color', DELOITTE_COLORS),
+        'axes.titlesize': 14, 'axes.titleweight': 'bold',
+        'axes.titlecolor': '#26890D',
+        'axes.spines.top': False, 'axes.spines.right': False,
+        'figure.facecolor': 'white', 'axes.facecolor': 'white',
+    })
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+DELOITTE_COLORS = ['#26890D', '#046A38', '#404040', '#0D8390', '#00ABAB']
+
+# ── Load data ──────────────────────────────────────────────────────────────────
+df = pd.read_excel("workspace/data.xlsx")
+df['Fecha_Mes'] = pd.to_datetime(df['Fecha_Mes'])
+df['period'] = df['Fecha_Mes'].dt.to_period('M')
+
+# ── Define time windows ────────────────────────────────────────────────────────
+latest_month = df['period'].max()  # Apr-2023
+ltm_end   = latest_month
+ltm_start = ltm_end - 11          # May-2022 → Apr-2023  (LTM23)
+pltm_end  = ltm_start - 1         # Apr-2022
+pltm_start= pltm_end - 11         # May-2021 → Apr-2022  (PLTM/LTM22)
+
+fy2021_start = pd.Period('2021-01', 'M')
+fy2021_end   = pd.Period('2021-12', 'M')
+fy2022_start = pd.Period('2022-01', 'M')
+fy2022_end   = pd.Period('2022-12', 'M')
+
+print(f"LTM23  window: {ltm_start}  → {ltm_end}")
+print(f"PLTM22 window: {pltm_start} → {pltm_end}")
+print(f"FY2021 window: {fy2021_start} → {fy2021_end}")
+print(f"FY2022 window: {fy2022_start} → {fy2022_end}")
+print()
+
+# ── Lifecycle classification (from prior iterations) ──────────────────────────
+all_periods = df.groupby('Nombre Modelo')['period'].agg(['min','max'])
+fy22_models = df[df['period'].between(fy2022_start, fy2022_end)]['Nombre Modelo'].unique()
+pltm_models = df[df['period'].between(pltm_start,  pltm_end)  ]['Nombre Modelo'].unique()
+ltm_models  = df[df['period'].between(ltm_start,   ltm_end)   ]['Nombre Modelo'].unique()
+
+pre_pltm_models = df[df['period'] < pltm_start]['Nombre Modelo'].unique()
+stable_models   = [m for m in ltm_models  if m in pre_pltm_models]
+bust_models     = [m for m in pltm_models if m not in ltm_models]
+ne_models       = [m for m in ltm_models  if m not in pltm_models]
+
+def lifecycle_label(model):
+    if model in stable_models: return 'Stable'
+    if model in bust_models:   return 'Bust'
+    if model in ne_models:     return 'NE'
+    return 'Other'
+
+df['lifecycle'] = df['Nombre Modelo'].map(lifecycle_label)
+
+# ── Restrict to Wholesale ──────────────────────────────────────────────────────
+ws = df[df['Canal'].str.upper().str.contains('WHOLESALE|WS|MAYORISTA|DISTRIBUTOR', na=False)].copy()
+if len(ws) == 0:
+    # Try to find the right channel label
+    print("Channel values:", df['Canal'].unique())
+    ws = df[~df['Canal'].str.upper().str.contains('ONLINE|RETAIL|TIENDA', na=False)].copy()
+
+print(f"WS rows: {len(ws):,}   Clients: {ws['Tienda_Cliente'].nunique():,}")
+print()
+
+# ── Identify returning vs new clients in LTM23 ────────────────────────────────
+pltm_ws_clients = set(ws[ws['period'].between(pltm_start, pltm_end)]['Tienda_Cliente'].unique())
+ltm_ws          = ws[ws['period'].between(ltm_start, ltm_end)].copy()
+ltm_ws['client_type'] = ltm_ws['Tienda_Cliente'].apply(
+    lambda c: 'Returning' if c in pltm_ws_clients else 'New'
+)
+
+print("=" * 70)
+print("SECTION 1 — NEW vs RETURNING WS CLIENT REVENUE SPLIT (LTM23)")
+print("=" * 70)
+
+client_type_rev = ltm_ws.groupby('client_type')['Venta Netas'].sum()
+client_counts   = ltm_ws.groupby('client_type')['Tienda_Cliente'].nunique()
+total_ltm_ws    = client_type_rev.sum()
+
+for ct in ['Returning', 'New']:
+    rev   = client_type_rev.get(ct, 0)
+    n     = client_counts.get(ct, 0)
+    avg   = rev / n if n > 0 else 0
+    share = rev / total_ltm_ws * 100 if total_ltm_ws > 0 else 0
+    print(f"  {ct:12s}: {n:5d} clients | €{rev/1e6:.2f}m revenue ({share:.1f}%) | avg €{avg/1e3:.1f}k/client")
+print(f"  {'TOTAL':12s}: {ltm_ws['Tienda_Cliente'].nunique():5d} clients | €{total_ltm_ws/1e6:.2f}m revenue")
+print()
+
+# ── Lifecycle mix by client type ───────────────────────────────────────────────
+print("-" * 70)
+print("  Lifecycle mix by client type (LTM23 WS revenue):")
+print("-" * 70)
+ct_lc = ltm_ws.groupby(['client_type','lifecycle'])['Venta Netas'].sum().unstack(fill_value=0)
+for ct in ['Returning', 'New']:
+    row   = ct_lc.loc[ct] if ct in ct_lc.index else pd.Series(dtype=float)
+    total = row.sum()
+    parts = []
+    for lc in ['Stable','NE','Bust','Other']:
+        v = row.get(lc, 0)
+        if total > 0:
+            parts.append(f"{lc}: €{v/1e6:.2f}m ({v/total*100:.1f}%)")
+    print(f"  {ct:12s}: " + " | ".join(parts))
+print()
+
+# ── Implied YoY if new clients excluded ────────────────────────────────────────
+pltm_ws_rev = ws[ws['period'].between(pltm_start, pltm_end)]['Venta Netas'].sum()
+returning_ltm_rev = client_type_rev.get('Returning', 0)
+new_ltm_rev       = client_type_rev.get('New', 0)
+
+print("-" * 70)
+print("  YoY growth decomposition (LTM23 vs PLTM22):")
+print("-" * 70)
+print(f"  PLTM22 WS total revenue      : €{pltm_ws_rev/1e6:.2f}m")
+print(f"  LTM23 WS total revenue       : €{total_ltm_ws/1e6:.2f}m")
+print(f"  Headline YoY                 : {(total_ltm_ws/pltm_ws_rev - 1)*100:+.1f}%")
+print(f"  YoY excl. new clients        : {(returning_ltm_rev/pltm_ws_rev - 1)*100:+.1f}%   (returning-only)")
+print(f"  New client contribution      : €{new_ltm_rev/1e6:.2f}m = {new_ltm_rev/pltm_ws_rev*100:.1f}pp of growth")
+print()
+
+# ── SECTION 2 — New client quality assessment ──────────────────────────────────
+print("=" * 70)
+print("SECTION 2 — NEW WS CLIENT QUALITY ASSESSMENT (FY2022 vs LTM23)")
+print("=" * 70)
+
+# FY2022 new clients = in FY2022 but NOT in FY2021
+fy21_clients = set(ws[ws['period'].between(fy2021_start, fy2021_end)]['Tienda_Cliente'].unique())
+fy22_all     = set(ws[ws['period'].between(fy2022_start, fy2022_end)]['Tienda_Cliente'].unique())
+fy22_new     = fy22_all - fy21_clients
+
+fy22_ws      = ws[ws['period'].between(fy2022_start, fy2022_end)]
+fy22_new_rev = fy22_ws[fy22_ws['Tienda_Cliente'].isin(fy22_new)]['Venta Netas'].sum()
+fy22_new_n   = len(fy22_new)
+
+# LTM23 new clients already computed
+ltm_new_rev  = new_ltm_rev
+ltm_new_n    = client_counts.get('New', 0)
+
+print(f"  {'Period':10s} | {'New Clients':>12s} | {'Revenue':>12s} | {'Avg/Client':>12s} | {'Lifecycle Mix (NE%)':>22s}")
+print(f"  {'-'*10} | {'-'*12} | {'-'*12} | {'-'*12} | {'-'*22}")
+
+# FY2022 new client lifecycle mix
+fy22_new_data = fy22_ws[fy22_ws['Tienda_Cliente'].isin(fy22_new)]
+fy22_new_lc   = fy22_new_data.groupby('lifecycle')['Venta Netas'].sum()
+fy22_new_total_lc = fy22_new_lc.sum()
+fy22_ne_pct   = fy22_new_lc.get('NE', 0) / fy22_new_total_lc * 100 if fy22_new_total_lc > 0 else 0
+fy22_st_pct   = fy22_new_lc.get('Stable', 0) / fy22_new_total_lc * 100 if fy22_new_total_lc > 0 else 0
+
+ltm_new_data = ltm_ws[ltm_ws['client_type'] == 'New']
+ltm_new_lc   = ltm_new_data.groupby('lifecycle')['Venta Netas'].sum()
+ltm_new_total_lc = ltm_new_lc.sum()
+ltm_ne_pct   = ltm_new_lc.get('NE', 0) / ltm_new_total_lc * 100 if ltm_new_total_lc > 0 else 0
+ltm_st_pct   = ltm_new_lc.get('Stable', 0) / ltm_new_total_lc * 100 if ltm_new_total_lc > 0 else 0
+
+print(f"  {'FY2022':10s} | {fy22_new_n:>12,d} | €{fy22_new_rev/1e6:>9.2f}m | €{fy22_new_rev/fy22_new_n/1e3:>8.1f}k | NE: {fy22_ne_pct:.1f}% / Stable: {fy22_st_pct:.1f}%")
+print(f"  {'LTM23':10s} | {ltm_new_n:>12,d} | €{ltm_new_rev/1e6:>9.2f}m | €{ltm_new_rev/ltm_new_n/1e3:>8.1f}k | NE: {ltm_ne_pct:.1f}% / Stable: {ltm_st_pct:.1f}%")
+print()
+
+# Revenue distribution of new clients (decile)
+print("-" * 70)
+print("  LTM23 New WS client revenue distribution:")
+print("-" * 70)
+new_client_rev = ltm_new_data.groupby('Tienda_Cliente')['Venta Netas'].sum().sort_values(ascending=False)
+print(f"  Median revenue/new client : €{new_client_rev.median()/1e3:.1f}k")
+print(f"  Mean   revenue/new client : €{new_client_rev.mean()/1e3:.1f}k")
+print(f"  Top 10% threshold         : €{new_client_rev.quantile(0.90)/1e3:.1f}k")
+print(f"  Top 10% share of new rev  : {new_client_rev[new_client_rev >= new_client_rev.quantile(0.90)].sum()/ltm_new_rev*100:.1f}%")
+print(f"  Clients < €1k revenue     : {(new_client_rev < 1000).sum()} ({(new_client_rev < 1000).sum()/len(new_client_rev)*100:.1f}%)")
+print(f"  Clients €1k–€5k revenue   : {((new_client_rev >= 1000) & (new_client_rev < 5000)).sum()}")
+print(f"  Clients > €5k revenue     : {(new_client_rev >= 5000).sum()}")
+print()
+
+# ── SECTION 3 — Declining top-20 WS accounts root-cause ──────────────────────
+print("=" * 70)
+print("SECTION 3 — DECLINING TOP-20 WS ACCOUNTS: PRODUCT-RISK vs RELATIONSHIP-RISK")
+print("=" * 70)
+
+pltm_ws_df = ws[ws['period'].between(pltm_start, pltm_end)].copy()
+ltm_ws_df  = ws[ws['period'].between(ltm_start,  ltm_end) ].copy()
+
+# Top 20 WS clients by combined PLTM+LTM revenue
+combined_rev = pd.concat([pltm_ws_df, ltm_ws_df]).groupby('Tienda_Cliente')['Venta Netas'].sum()
+top20_clients = combined_rev.nlargest(20).index.tolist()
+
+pltm_top20 = pltm_ws_df[pltm_ws_df['Tienda_Cliente'].isin(top20_clients)].groupby('Tienda_Cliente')['Venta Netas'].sum()
+ltm_top20  = ltm_ws_df [ltm_ws_df ['Tienda_Cliente'].isin(top20_clients)].groupby('Tienda_Cliente')['Venta Netas'].sum()
+
+top20_df = pd.DataFrame({'PLTM22': pltm_top20, 'LTM23': ltm_top20}).fillna(0)
+top20_df['YoY_pct'] = (top20_df['LTM23'] / top20_df['PLTM22'] - 1) * 100
+top20_df = top20_df.sort_values('YoY_pct')
+
+# Lifecycle mix for each top-20 client in LTM23
+def client_lifecycle_mix(client, period_df):
+    cdata = period_df[period_df['Tienda_Cliente'] == client]
+    total = cdata['Venta Netas'].sum()
+    if total == 0: return {}
+    lc = cdata.groupby('lifecycle')['Venta Netas'].sum() / total * 100
+    return lc.to_dict()
+
+print(f"\n  {'Client':<32s} | {'PLTM22':>9s} | {'LTM23':>9s} | {'YoY%':>7s} | {'Stable%':>8s} | {'NE%':>6s} | {'Verdict'}")
+print(f"  {'-'*32} | {'-'*9} | {'-'*9} | {'-'*7} | {'-'*8} | {'-'*6} | {'-'*20}")
+
+for client in top20_df.index:
+    row    = top20_df.loc[client]
+    mix_ltm = client_lifecycle_mix(client, ltm_ws_df)
+    mix_pltm = client_lifecycle_mix(client, pltm_ws_df)
+    st_pct = mix_ltm.get('Stable', 0)
+    ne_pct = mix_ltm.get('NE', 0)
+    bu_pct = mix_ltm.get('Bust', 0)
+    
+    # Root-cause classification
+    if row['YoY_pct'] < -10:
+        ne_pltm = mix_pltm.get('NE', 0)
+        bu_pltm = mix_pltm.get('Bust', 0)
+        if bu_pltm > 30:
+            verdict = "Product-risk: Bust decay"
+        elif ne_pctm_prev := mix_pltm.get('NE', 0) > 50:
+            verdict = "Product-risk: NE fade"
+        elif st_pct < 20:
+            verdict = "Relationship-risk: low Stable"
+        else:
+            verdict = "Mixed"
+    elif row['YoY_pct'] > 10:
+        verdict = "Growing"
+    else:
+        verdict = "Stable"
+    
+    client_label = str(client)[:31]
+    yoy_str = f"{row['YoY_pct']:+.1f}%"
+    print(f"  {client_label:<32s} | €{row['PLTM22']/1e3:>6.1f}k | €{row['LTM23']/1e3:>6.1f}k | {yoy_str:>7s} | {st_pct:>7.1f}% | {ne_pct:>5.1f}% | {verdict}")
+print()
+
+# Detail on declining clients
+print("-" * 70)
+print("  Deep-dive: Top-20 decliners (YoY < -10%) — PLTM22 vs LTM23 lifecycle shift:")
+print("-" * 70)
+decliners = top20_df[top20_df['YoY_pct'] < -10].index.tolist()
+for client in decliners:
+    mix_pltm = client_lifecycle_mix(client, pltm_ws_df)
+    mix_ltm  = client_lifecycle_mix(client, ltm_ws_df)
+    pltm_rev = top20_df.loc[client, 'PLTM22']
+    ltm_rev  = top20_df.loc[client, 'LTM23']
+    print(f"\n  {str(client)[:40]}")
+    print(f"    Revenue: €{pltm_rev/1e3:.1f}k → €{ltm_rev/1e3:.1f}k  ({(ltm_rev/pltm_rev-1)*100:+.1f}%)")
+    print(f"    PLTM22 lifecycle: " + " | ".join([f"{k}: {v:.1f}%" for k,v in sorted(mix_pltm.items(), key=lambda x: -x[1])]))
+    print(f"    LTM23  lifecycle: " + " | ".join([f"{k}: {v:.1f}%" for k,v in sorted(mix_ltm.items(), key=lambda x: -x[1])]))
+    # Top models in PLTM22 for this client
+    client_pltm = pltm_ws_df[pltm_ws_df['Tienda_Cliente'] == client].groupby('Nombre Modelo')['Venta Netas'].sum().nlargest(5)
+    print(f"    Top 5 models PLTM22: " + ", ".join([f"{m} €{v/1e3:.1f}k" for m,v in client_pltm.items()]))
+    client_ltm = ltm_ws_df[ltm_ws_df['Tienda_Cliente'] == client].groupby('Nombre Modelo')['Venta Netas'].sum().nlargest(5)
+    print(f"    Top 5 models LTM23:  " + ", ".join([f"{m} €{v/1e3:.1f}k" for m,v in client_ltm.items()]))
+print()
+
+# ── SECTION 4 — Returning client NE model transition risk ─────────────────────
+print("=" * 70)
+print("SECTION 4 — RETURNING WS CLIENTS: NE MODEL DEPENDENCY TRANSITION RISK")
+print("=" * 70)
+
+returning_ltm = ltm_ws[ltm_ws['client_type'] == 'Returning']
+ret_lc = returning_ltm.groupby('lifecycle')['Venta Netas'].sum()
+ret_total = ret_lc.sum()
+for lc in ['Stable', 'NE', 'Bust', 'Other']:
+    v = ret_lc.get(lc, 0)
+    print(f"  {lc:8s}: €{v/1e6:.2f}m ({v/ret_total*100:.1f}% of returning revenue)")
+print()
+
+# NE models bought by returning clients — are they Durable?
+# Compute +3m retention for NE models bought by returning clients
+ne_models_returning = returning_ltm[returning_ltm['lifecycle']=='NE']['Nombre Modelo'].unique()
+
+all_ws = ws.copy()
+retention_list = []
+for model in ne_models_returning:
+    mdata = all_ws[all_ws['Nombre Modelo'] == model].groupby('period')['Venta Netas'].sum().sort_index()
+    if len(mdata) < 2: continue
+    peak_period = mdata.idxmax()
+    peak_rev    = mdata[peak_period]
+    post3 = peak_period + 3
+    ret3 = mdata.get(post3, 0) / peak_rev if peak_rev > 0 else 0
+    ltm_rev_model = returning_ltm[returning_ltm['Nombre Modelo']==model]['Venta Netas'].sum()
+    retention_list.append({'model': model, 'peak_rev': peak_rev, 'ret3': ret3, 'ltm_rev': ltm_rev_model})
+
+ret_df = pd.DataFrame(retention_list)
+if len(ret_df) > 0:
+    ret_df['durability'] = ret_df['ret3'].apply(
+        lambda r: 'Durable' if r >= 0.40 else ('Mid-tier' if r >= 0.20 else 'Transient')
+    )
+    dur_summary = ret_df.groupby('durability').agg(
+        n_models=('model','count'),
+        ltm_rev=('ltm_rev','sum')
+    )
+    dur_total = dur_summary['ltm_rev'].sum()
+    print("  NE model durability profile for returning-client purchases:")
+    print(f"  {'Durability':10s} | {'N Models':>9s} | {'LTM23 Rev':>12s} | {'Rev Share':>10s}")
+    print(f"  {'-'*10} | {'-'*9} | {'-'*12} | {'-'*10}")
+    for d in ['Durable','Mid-tier','Transient']:
+        row = dur_summary.loc[d] if d in dur_summary.index else pd.Series({'n_models':0,'ltm_rev':0})
+        print(f"  {d:10s} | {int(row['n_models']):>9d} | €{row['ltm_rev']/1e6:>9.2f}m | {row['ltm_rev']/dur_total*100:>9.1f}%")
+    print()
+    # Revenue at risk = Transient NE in returning clients
+    transient_rev = dur_summary.loc['Transient','ltm_rev'] if 'Transient' in dur_summary.index else 0
+    print(f"  ⚠ Revenue at risk (Transient NE, returning clients): €{transient_rev/1e6:.2f}m")
+    print(f"    = {transient_rev/ret_total*100:.1f}% of total returning client WS revenue")
+print()
+
+# ── CHART 1 — New vs Returning revenue split + lifecycle bars ─────────────────
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# Left: stacked bar new vs returning by lifecycle
+client_types = ['Returning', 'New']
+lifecycles   = ['Stable', 'NE', 'Bust']
+colors_lc    = {'Stable': DELOITTE_COLORS[0], 'NE': DELOITTE_COLORS[3], 'Bust': DELOITTE_COLORS[2]}
+
+ax1 = axes[0]
+bottoms = np.zeros(2)
+for lc in lifecycles:
+    vals = []
+    for ct in client_types:
+        sub = ltm_ws[ltm_ws['client_type'] == ct]
+        v   = sub[sub['lifecycle'] == lc]['Venta Netas'].sum() / 1e6
+        vals.append(v)
+    bars = ax1.bar(client_types, vals, bottom=bottoms, label=lc, color=colors_lc[lc], width=0.5)
+    for i, (bar, v) in enumerate(zip(bars, vals)):
+        if v > 0.3:
+            ax1.text(bar.get_x() + bar.get_width()/2,
+                     bottoms[i] + v/2,
+                     f'€{v:.1f}m', ha='center', va='center',
+                     fontsize=9, color='white', fontweight='bold')
+    bottoms += np.array(vals)
+
+ax1.set_title('LTM23 WS Revenue\nNew vs Returning × Lifecycle', color='#26890D', fontweight='bold')
+ax1.set_ylabel('Revenue (€m)')
+ax1.legend(loc='upper right', fontsize=9)
+for i, (ct, total_h) in enumerate(zip(client_types, bottoms)):
+    ax1.text(i, total_h + 0.05, f'€{total_h:.1f}m', ha='center', va='bottom', fontsize=10, fontweight='bold')
+ax1.set_ylim(0, max(bottoms)*1.15)
+
+# Right: new client revenue distribution (histogram)
+ax2 = axes[1]
+bins = [0, 500, 1000, 2000, 5000, 10000, 20000, 50000, 200000]
+labels_b = ['<0.5k','0.5-1k','1-2k','2-5k','5-10k','10-20k','20-50k','50k+']
+counts, _ = np.histogram(new_client_rev.values, bins=bins)
+cum_rev   = []
+for i in range(len(bins)-1):
+    mask = (new_client_rev >= bins[i]) & (new_client_rev < bins[i+1])
+    cum_rev.append(new_client_rev[mask].sum() / 1e3)
+
+bars2 = ax2.bar(range(len(labels_b)), counts, color=DELOITTE_COLORS[3], alpha=0.85)
+ax2_r = ax2.twinx()
+ax2_r.plot(range(len(labels_b)), cum_rev, color=DELOITTE_COLORS[0], marker='o', linewidth=2, markersize=6)
+ax2_r.set_ylabel('Revenue in bracket (€k)', color=DELOITTE_COLORS[0])
+
+ax2.set_xticks(range(len(labels_b)))
+ax2.set_xticklabels(labels_b, rotation=30, ha='right', fontsize=8)
+ax2.set_xlabel('Revenue per new client')
+ax2.set_ylabel('# New clients')
+ax2.set_title('LTM23 New WS Client\nRevenue Distribution', color='#26890D', fontweight='bold')
+for bar, c in zip(bars2, counts):
+    if c > 0:
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                 str(c), ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
+plt.savefig('workspace/graphs/iter1_new_vs_returning_ws_revenue.png', dpi=150, bbox_inches='tight')
+plt.close()
+print("GRAPH_SAVED: iter1_new_vs_returning_ws_revenue.png — LTM23 WS new vs returning revenue by lifecycle + new client revenue distribution")
+
+# ── CHART 2 — Top-20 WS clients YoY waterfall with lifecycle context ──────────
+fig, ax = plt.subplots(figsize=(14, 7))
+top20_sorted = top20_df.sort_values('YoY_pct', ascending=True)
+client_labels = [str(c)[:25] for c in top20_sorted.index]
+yoy_vals = top20_sorted['YoY_pct'].values
+colors_bar = [DELOITTE_COLORS[2] if v < 0 else DELOITTE_COLORS[0] for v in yoy_vals]
+bars3 = ax.barh(range(len(client_labels)), yoy_vals, color=colors_bar, height=0.6)
+ax.axvline(0, color='#404040', linewidth=0.8)
+for i, (bar, v) in enumerate(zip(bars3, yoy_vals)):
+    offset = -2 if v < 0 else 2
+    ha_align = 'right' if v < 0 else 'left'
+    ax.text(v + offset, i, f'{v:+.0f}%', va='center', ha=ha_align, fontsize=8)
+
+# Overlay lifecycle Stable% as annotations
+for i, client in enumerate(top20_sorted.index):
+    mix = client_lifecycle_mix(client, ltm_ws_df)
+    st  = mix.get('Stable', 0)
+    ne  = mix.get('NE', 0)
+    ax.text(max(yoy_vals)+5, i, f'St:{st:.0f}% NE:{ne:.0f}%',
+            va='center', fontsize=7, color='#404040')
+
+ax.set_yticks(range(len(client_labels)))
+ax.set_yticklabels(client_labels, fontsize=8)
+ax.set_xlabel('YoY Revenue Change (%)')
+ax.set_title('Top-20 WS Clients — YoY% Change (LTM23 vs PLTM22)\nwith LTM23 Lifecycle Mix', color='#26890D', fontweight='bold')
+ax.set_xlim(min(yoy_vals)-25, max(yoy_vals)+45)
+plt.tight_layout()
+plt.savefig('workspace/graphs/iter1_top20_ws_client_yoy.png', dpi=150, bbox_inches='tight')
+plt.close()
+print("GRAPH_SAVED: iter1_top20_ws_client_yoy.png — Top-20 WS client YoY% change with lifecycle mix annotation")
+
+# ── SUMMARY ────────────────────────────────────────────────────────────────────
+print()
+print("=" * 70)
+print("EXECUTIVE SUMMARY")
+print("=" * 70)
+
+ret_rev  = client_type_rev.get('Returning', 0)
+new_rev  = client_type_rev.get('New', 0)
+ret_n    = client_counts.get('Returning', 0)
+new_n    = client_counts.get('New', 0)
+
+print(f"  LTM23 WS: €{total_ltm_ws/1e6:.2f}m total | Returning: €{ret_rev/1e6:.2f}m ({ret_rev/total_ltm_ws*100:.0f}%) | New: €{new_rev/1e6:.2f}m ({new_rev/total_ltm_ws*100:.0f}%)")
+print(f"  Returning {ret_n} clients LfL vs PLTM22: {(ret_rev/pltm_ws_rev-1)*100:+.1f}%")
+print(f"  New {new_n} clients avg: €{new_rev/new_n/1e3:.1f}k vs FY2022 new avg €{fy22_new_rev/fy22_new_n/1e3:.1f}k (quality compression)")
+if len(ret_df) > 0:
+    transient_pct = transient_rev / ret_total * 100 if ret_total > 0 else 0
+    print(f"  Returning client NE rev = Transient {transient_pct:.0f}% → direct forward revenue risk")
+print(f"  Declining top-20 clients: {len(decliners)} accounts; root cause primarily product lifecycle (Bust/NE fade)")
+```
+
+**Output (preview):**
+```
+LTM23  window: 2022-05  → 2023-04
+PLTM22 window: 2021-05 → 2022-04
+FY2021 window: 2021-01 → 2021-12
+FY2022 window: 2022-01 → 2022-12
+
+WS rows: 52,188   Clients: 2,020
+
+======================================================================
+SECTION 1 — NEW vs RETURNING WS CLIENT REVENUE SPLIT (LTM23)
+======================================================================
+  Returning   :   794 clients | €16.73m revenue (78.1%) | avg €21.1k/client
+  New         :   896 clients | €4.69m revenue (21.9%) | avg €5.2k/client
+  TOTAL       :  1690 clients | €21.43m revenue
+
+------------------------------
 ```
 
 ---

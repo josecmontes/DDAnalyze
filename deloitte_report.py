@@ -239,7 +239,7 @@ You are a senior report designer at Deloitte creating the blueprint for a premiu
 report. You will receive analysis data from a due diligence engagement and must design \
 a visually stunning, print-ready report structure.
 
-Output a single valid JSON object — no markdown fences, no commentary.
+Output ONLY a single valid JSON object — no markdown fences, no commentary.
 
 The JSON schema:
 {
