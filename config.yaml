@@ -18,7 +18,7 @@ repetition_mode: soft
 debug_logging: true                # true to enable DEBUG-level console output
 fresh_start: false                 # true to reset active_context.md and full_archive.txt
 summarize_on_start: false          # run Summarizer on active_context.md before first iteration
-summarizer_every_n: 10
+summarizer_every_n: 20
 hybrid_threshold: 12
 
 # ─── Web Research Module ──────────────────────────────────────────────────────
@@ -50,14 +50,14 @@ phase2_summary_max_tokens: 4000
 
 # ─── Orchestrator ────────────────────────────────────────────────────────────
 orchestrator_schedule:
+  - iterations: 5
+    type: data_analysis
   - iterations: 1
-    type: data_analysis
-  - iterations: 3
     type: web_research
   - iterations: 5
     type: data_analysis
-  - iterations: 2
+  - iterations: 1
     type: web_research
-  - iterations: 5
+  - iterations: 1
     type: data_analysis
   - type: report
