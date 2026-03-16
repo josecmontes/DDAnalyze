@@ -688,6 +688,11 @@ def main() -> None:
     # ── Load config ──────────────────────────────────────────────────────────
     config = yaml.safe_load(read_file("config.yaml"))
 
+    # Apply orchestrator overrides passed via env var (keeps config.yaml untouched)
+    _env_overrides = os.environ.get("DDANALYZE_CONFIG_OVERRIDES")
+    if _env_overrides:
+        config.update(json.loads(_env_overrides))
+
     model = config.get("web_research_model", config["model"])
     max_tokens = config.get("web_research_max_tokens", config["max_tokens"])
     researcher_max_tokens = config.get("web_research_researcher_max_tokens", 8000)
