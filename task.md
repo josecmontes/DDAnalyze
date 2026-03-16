@@ -14,6 +14,8 @@ Canal: nos dice el tipo de distribución.
 Venta Total: venta sin IVA.
 Ventas Tot: nuesta columna en € con IVA.
 Año fiscal: nos gusta ver números y crecimientos (CAGR por ejemplo) en base a los años fiscales.
+
+Keep in mind that the clients column is used diferently for diferent channels: in Online there is only one "client" because it is sales through the website. for Retail every "client" is actually a phisical onwed store. The only time it is actually a client is for the Wholesale channel"
 ]
 
 ## Analysis Catalog

@@ -82,9 +82,10 @@ Your job:
    unless you can add a meaningfully different angle (different columns, different time window,
    different breakdown). Do deep dive or repeat an analysis by sub-sets if you think it will enhance the business understanding.
    Avoid approaches listed in "Dead Ends & Closed Paths".
-2. Choose one analysis from the catalog, or a logical extension of it. Ensure that the main, high-level and introductory analysis 
-   tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis. 
-   Only after the basic overviews are well covered and understood by previous iterations go ahead planning more in-depth analysis.
+2. Choose one analysis from the catalog, or a logical extension of it. Ensure that all the main, high-level and introductory analysis 
+   tables and graphs (such as basic product, geographies breakdown, etc...) are already done before engaging in any kind of complex analysis. 
+   Only after at least 3 iterations have been dedicated to the basic overviews and ALL DIMENSIONS are well covered and understood by previous iterations go ahead
+    planning more in-depth analysis. Do not provide forecasts or speculations in your analysis, keep them objective and descriptive.
 3. Write clean, simple Python code that loads the data and prints results.
 4. Focus on business understanding: who buys, how much, when, how concentrated, how it changes.
    Only perform regression, hypothesis testing, or statistical modeling to enhance business understanding.

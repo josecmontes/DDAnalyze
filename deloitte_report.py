@@ -393,8 +393,12 @@ The JSON schema:
     - <p class='body-text'>...</p> for narrative paragraphs\\n\
     - <div class='basis-of-prep'><h4>Basis of Preparation</h4><p>...</p></div> for methodology\\n\
     - <div class='callout callout-insight'>...</div> or callout-risk for callout boxes\\n\
-    - <div class='table-container'><table class='data-table'>...</table></div> for tables\\n\
-    - Tables MUST use <thead> with <th> for headers and <tbody> with <td> for data rows\\n\
+    - <div class='table-container'><table class='data-table'>...</table><div class='table-source'>Source: [Insert Source]</div></div> for tables\\n\
+    - MANDATORY TABLE FORMATTING:\\n\
+      1. Use <thead> with <th> for headers. The top-left <th> MUST be the unit (e.g., €k, #, %). Subsequent <th> are time periods.\\n\
+      2. Use <tbody> with <td> for data. Apply class='text-left' to the first column (categories). Apply class='text-right' to ALL numerical columns.\\n\
+      3. For summary/total rows, wrap the row in <tr class='total-row'>...</tr>.\\n\
+      4. For percentage sub-tables, add a divider row <tr class='sub-table-header'><td colspan='100%'>As % of Total</td></tr> and apply class='text-right font-italic' to the percentage data cells.\\n\
     - <div class='graph-embed'><img src='GRAPH_PLACEHOLDER:filename.png' /></div> for graph images\\n\
     - Use <strong> for bold, <em> for emphasis\\n\
     - For chart placeholders: <div class='chart-wrapper'><canvas id='CHART_ID'></canvas></div>",
@@ -428,14 +432,13 @@ Rules:
 1. Write in formal senior consulting register. No conversational phrases.
 2. All monetary values: €-prefix, lowercase suffix (€16.7m, ~€0.57m). NEVER use "EUR".
 3. Every sub-section MUST open with a Basis of Preparation paragraph.
-4. Tables must have proper <thead>/<tbody> structure.
-5. Chart data must use REAL NUMBERS extracted from the analysis outputs provided.
+4. Chart data must use REAL NUMBERS extracted from the analysis outputs provided.
    Do NOT invent data. If exact numbers aren't available, omit the chart.
-6. Be thorough: 300-600 words of prose per sub-section (excluding tables).
-7. Use callout boxes for key insights or risk flags.
-8. For chart colors, use these Deloitte brand colors in order:
+5. Be thorough: 300-600 words of prose per sub-section (excluding tables).
+6. Use callout boxes for key insights or risk flags.
+7. For chart colors, use these Deloitte brand colors in order:
    ["#26890D", "#046A38", "#404040", "#0D8390", "#00ABAB", "#86BC25", "#43B02A", "#009A44"]
-9. Output ONLY the JSON object."""
+8. Output ONLY the JSON object."""
 
 
 def build_section_writer_prompt(
@@ -929,16 +932,26 @@ HTML_TEMPLATE = """\
     font-size: 9.5pt;
   }}
 
+  /* Table Utilities */
+  .text-left {{ text-align: left !important; }}
+  .text-right {{ text-align: right !important; }}
+  .text-center {{ text-align: center !important; }}
+  .font-italic {{ font-style: italic !important; }}
+
   .data-table thead th {{
     background: var(--green-dark);
     color: var(--white);
     font-weight: 700;
     padding: 10px 12px;
-    text-align: left;
+    text-align: right; 
     font-size: 9pt;
     text-transform: uppercase;
     letter-spacing: 0.3px;
     border: none;
+  }}
+  
+  .data-table thead th:first-child {{
+    text-align: left;
   }}
 
   .data-table tbody td {{
@@ -963,6 +976,21 @@ HTML_TEMPLATE = """\
 
   .data-table tbody tr.total-row td {{
     border-bottom: 2px solid var(--green-dark);
+  }}
+
+  .data-table tbody tr.sub-table-header td {{
+    font-weight: 700;
+    padding-top: 16px;
+    background: var(--white) !important;
+    border-bottom: 1px solid #E0E0E0;
+    color: var(--green-dark);
+  }}
+
+  .table-source {{
+    font-size: 8.5pt;
+    color: var(--grey);
+    margin-top: 6px;
+    font-style: normal;
   }}
 
   /* ─── Charts ───────────────────────────────────────────────────── */

@@ -50,7 +50,7 @@ phase2_summary_max_tokens: 4000
 
 # ─── Orchestrator ────────────────────────────────────────────────────────────
 orchestrator_schedule:
-  - iterations: 5
+  - iterations: 1
     type: data_analysis
   - iterations: 3
     type: web_research
