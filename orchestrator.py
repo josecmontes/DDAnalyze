@@ -29,7 +29,7 @@ import anthropic
 import yaml
 
 from dotenv import load_dotenv
-from excel_export import export_iterations_to_excel, generate_databook
+from excel_export import export_iterations_to_excel, generate_databooks
 
 load_dotenv()
 API_KEY = os.getenv('API_KEY')
@@ -692,7 +692,8 @@ INTERACTIVE_HELP = """
 ║                            year with all detail rows         ║
 ║                                                              ║
 ║    /export-all        Export all iterations to Excel backup   ║
-║    /databook          Generate curated databook (by theme)   ║
+║    /databook          Generate databook per iteration         ║
+║    /databook <N>      Generate databook for iteration N only  ║
 ║                                                              ║
 ║    /analyze <N>       Run N more data analysis iterations    ║
 ║    /research <N>      Run N more web research iterations     ║
@@ -851,21 +852,32 @@ def interactive_loop(client: anthropic.Anthropic, model: str, config: dict) -> N
                 print("\nExport failed. Check the log for details.")
             continue
 
-        elif user_input.lower() == "/databook":
+        elif user_input.lower().startswith("/databook"):
             archive_path = config.get("archive_file", "full_archive.txt")
-            context_path = config["active_context_file"]
+            data_file = config.get("data_file", "workspace/data.xlsx")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"workspace/exports/databook_{timestamp}.xlsx"
-            max_tokens = config.get("databook_max_tokens", 20000)
+            output_dir = f"workspace/exports/databooks_{timestamp}"
+            max_tokens = config.get("databook_max_tokens", 16000)
 
-            print("\nGenerating curated databook (this may take a minute)...")
-            result = generate_databook(
-                client, model, archive_path, context_path, output_path, max_tokens
-            )
-            if result:
-                print(f"\nDatabook created: {result}")
+            # Optional: /databook 3 → only iteration 3
+            parts = user_input.split()
+            only_iter = None
+            if len(parts) > 1 and parts[1].isdigit():
+                only_iter = int(parts[1])
+                print(f"\nGenerating databook for iteration {only_iter}...")
             else:
-                print("\nDatabook generation failed. Check the log for details.")
+                print("\nGenerating one databook per successful iteration...")
+
+            results = generate_databooks(
+                client, model, archive_path, data_file, output_dir, max_tokens,
+                only_iteration=only_iter,
+            )
+            if results:
+                print(f"\n{len(results)} databook(s) created in {output_dir}/")
+                for p in results:
+                    print(f"  {Path(p).name}")
+            else:
+                print("\nNo databooks created. Check the log for details.")
             continue
 
         elif user_input.lower().startswith("/extract"):
