@@ -264,7 +264,7 @@ def call_llm_with_web_search(
             max_tokens=max_tokens,
             system=system,
             messages=messages,
-            tools=[{"type": "web_search_20250305"}],
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
         )
 
         total_in_tok += response.usage.input_tokens
