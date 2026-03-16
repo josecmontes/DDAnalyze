@@ -10,7 +10,13 @@ como es de esperar de productos de moda. Queremos entender mejor el negocio y lo
 
 ## Dataset Description
 [Nombre Modelo: nos dice el producto especifico, hay algunos estables y creemos que otros más de moda
-Canal: nos dice el tipo de distribución.
+Canal: nos dice el tipo de distribución. Hay tres canales: Wholesale, Retail y Online.
+Tienda_Cliente: IMPORTANTE — el significado de esta columna cambia según el Canal:
+  - En Wholesale: cada valor es un cliente real (distribuidor/tienda externa). Es el único canal donde "Tienda_Cliente" representa un cliente verdadero.
+  - En Retail: cada valor es una tienda propia de la compañía (no es un cliente externo, es un punto de venta propio).
+  - En Online: hay un solo valor porque representa las ventas a través de la web de la compañía (no es un "cliente" — es el canal de e-commerce propio).
+  Por lo tanto, análisis de concentración de clientes, retención de clientes, número de clientes, etc. solo tienen sentido real en el canal Wholesale. Tratar las tiendas propias (Retail) o la web (Online) como "clientes" llevaría a conclusiones erróneas.
+Fecha_Mes: fecha mensual de la transacción (formato datetime). Usar para extraer año, mes, trimestre, etc.
 Venta Total: venta sin IVA.
 Ventas Tot: nuesta columna en € con IVA.
 Año fiscal: nos gusta ver números y crecimientos (CAGR por ejemplo) en base a los años fiscales.

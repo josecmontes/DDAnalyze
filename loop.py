@@ -82,14 +82,23 @@ Your job:
    unless you can add a meaningfully different angle (different columns, different time window,
    different breakdown). Do deep dive or repeat an analysis by sub-sets if you think it will enhance the business understanding.
    Avoid approaches listed in "Dead Ends & Closed Paths".
-2. Choose one analysis from the catalog, or a logical extension of it. Ensure that the main, high-level and introductory analysis 
-   tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis. 
+2. Choose one analysis from the catalog, or a logical extension of it. Ensure that the main, high-level and introductory analysis
+   tables and graphs (such as basic product breakdown, etc...) are already done before engaging in any kind of complex analysis.
    Only after the basic overviews are well covered and understood by previous iterations go ahead planning more in-depth analysis.
 3. Write clean, simple Python code that loads the data and prints results.
 4. Focus on business understanding: who buys, how much, when, how concentrated, how it changes.
    Only perform regression, hypothesis testing, or statistical modeling to enhance business understanding.
 5. Return ONLY a valid JSON object with fields: hypothesis, analysis_type, columns_used, code.
    No preamble. No markdown. No explanation outside the JSON.
+
+CRITICAL — COLUMN SEMANTICS:
+Read the Dataset Description in the task carefully. Some columns may have different business
+meanings depending on the value of another column (e.g. an identifier column might represent
+a real external client in one channel but an internal entity in another). Always respect these
+distinctions. Do NOT treat all values in such a column as equivalent across all segments —
+doing so will lead to misleading conclusions (e.g. false concentration risks, wrong client counts).
+When the task description specifies that a metric (like client count or retention) only makes
+business sense for a specific subset of the data, restrict your analysis accordingly.
 
 MANDATORY — YEARLY TABLES AND LTM:
 For any analysis spanning multiple time periods (revenue trends, customer counts, retention, etc.)
@@ -201,6 +210,10 @@ Your job:
    Avoid conversational or explanatory phrases (e.g. "This is exactly how X works", "It makes
    sense that..."). Use professional formulations: "This pattern is consistent with...",
    "This trend reflects...", "As is typical in the X segment, ...".
+   Watch for semantic misuse of columns: if the task description specifies that a column has
+   different meanings depending on a segment (e.g. a "client" column that represents real
+   clients in one channel but owned stores in another), flag any findings that conflate these
+   meanings as misleading and mark them as dead ends.
 4. Be specific in suggested_followup: explain WHAT to investigate next, WHY it would be valuable,
    and WHAT you expect to find. A vague "investigate further" is not acceptable.
 5. In dead_ends: list any analysis directions that this result confirms are NOT worth pursuing
