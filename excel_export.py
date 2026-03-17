@@ -3,25 +3,13 @@
 Excel Export & Databook Generator
 
 Two modes:
-
   /export-all  →  Quick structured dump of all iterations into one Excel file.
-                  No LLM needed. Summary + Findings + per-iteration detail sheets.
-
-  /databook    →  One professional databook PER successful iteration.
-                  Each workbook contains:
-                    • "Data" sheet — full raw dataset from workspace/data.xlsx
-                    • Analysis sheets — with Excel FORMULAS referencing the Data
-                      sheet so every number is traceable to the source rows.
-                  Generated one at a time via LLM (one call per iteration).
+  /databook    →  One professional databook PER successful iteration with Excel formulas.
 
 Usage:
   python excel_export.py                # export-all mode
   python excel_export.py --databook     # generate per-iteration databooks
   python excel_export.py --databook -n 3  # only iteration 3
-
-  # Or from orchestrator interactive mode:
-  /export-all
-  /databook
 """
 
 import json
@@ -35,110 +23,29 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import anthropic
 import pandas as pd
-import yaml
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-
-from dotenv import load_dotenv
-
-load_dotenv()
-API_KEY = os.getenv("API_KEY")
 
 os.chdir(Path(__file__).parent)
 
-# ─── Logging Setup ────────────────────────────────────────────────────────────
+from utils import (
+    read_file, write_file, load_config, setup_logging,
+    call_llm, parse_json_response, parse_archive_all, create_client,
+)
 
 logger = logging.getLogger("ddanalyze.excel_export")
 
-
-def setup_logging(debug: bool = False, log_dir: str = "logs") -> Path:
-    Path(log_dir).mkdir(exist_ok=True)
-    log_file = Path(log_dir) / f"excel_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    console_level = logging.DEBUG if debug else logging.INFO
-    root = logging.getLogger("ddanalyze")
-    root.setLevel(logging.DEBUG)
-    if not root.handlers:
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(console_level)
-        ch.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-        root.addHandler(ch)
-        fh = logging.FileHandler(log_file, encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)-7s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
-        ))
-        root.addHandler(fh)
-    return log_file
-
-
-# ─── File Utilities ───────────────────────────────────────────────────────────
-
-def read_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-def write_file(path: str, content: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-# ─── Archive Parser ──────────────────────────────────────────────────────────
-
-_INTERNAL_ERROR_LABELS = {
-    "JSON_PARSE_ERROR", "CRITIC_JSON_PARSE_ERROR", "TIMEOUT", "FATAL_ERROR",
-    "SYNTH_JSON_PARSE_ERROR",
-}
+# ─── Archive Parser (extended with evaluation fields) ─────────────────────────
 
 
 def parse_archive_entries(archive_text: str) -> list:
-    """Parse full_archive.txt into structured dicts for all non-internal-error entries."""
-    separator = "=" * 80
-    entries = []
-    for block in archive_text.split(separator):
-        block = block.strip()
-        if not block or "ITERATION:" not in block:
-            continue
-        status_match = re.search(r"\nSTATUS:\s*(\S+)", block)
-        if not status_match:
-            continue
-        status = status_match.group(1).strip()
-        if status.upper() in _INTERNAL_ERROR_LABELS:
-            continue
-        entry = {"status": status}
-        for field, pattern in [
-            ("iteration", r"ITERATION:\s*(\d+)"),
-            ("date", r"DATE:\s*(.+)"),
-            ("analysis_type", r"ANALYSIS TYPE:\s*(.+)"),
-            ("hypothesis", r"HYPOTHESIS:\s*(.+)"),
-            ("columns_used", r"COLUMNS USED:\s*(.+)"),
-        ]:
-            m = re.search(pattern, block)
-            if m:
-                entry[field] = m.group(1).strip()
-        dash_sep = "-" * 80
-        code_m = re.search(r"CODE:\n(.*?)\n" + re.escape(dash_sep), block, re.DOTALL)
-        if code_m:
-            entry["code"] = code_m.group(1).strip()
-        output_m = re.search(
-            r"OUTPUT:\n(.*?)(?:\n" + re.escape(dash_sep) + r"|\Z)", block, re.DOTALL
-        )
-        if output_m:
-            entry["output"] = output_m.group(1).strip()
-        eval_m = re.search(r"EVALUATION:\n(.*?)(?:\Z)", block, re.DOTALL)
-        if eval_m:
-            entry["evaluation"] = eval_m.group(1).strip()
-        if "iteration" in entry:
-            entries.append(entry)
-    return entries
+    """Alias for shared parse_archive_all."""
+    return parse_archive_all(archive_text)
 
 
 def _parse_evaluation_fields(eval_text: str) -> dict:
-    """Extract structured fields from the evaluation text block."""
     fields = {}
     if not eval_text:
         return fields
@@ -165,62 +72,10 @@ def _parse_evaluation_fields(eval_text: str) -> dict:
     return fields
 
 
-# ─── LLM Utilities ───────────────────────────────────────────────────────────
-
-def call_llm(
-    client: anthropic.Anthropic,
-    system: str,
-    user: str,
-    model: str,
-    max_tokens: int,
-    tag: str = "LLM",
-) -> str:
-    logger.debug(f"[{tag}] Sending request | system={len(system):,}ch user={len(user):,}ch")
-    t0 = time.time()
-    with client.messages.stream(
-        model=model, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user}],
-    ) as stream:
-        response = stream.get_final_message()
-    elapsed = time.time() - t0
-    in_tok = response.usage.input_tokens
-    out_tok = response.usage.output_tokens
-    logger.info(f"  [{tag}] Done in {elapsed:.1f}s | tokens in={in_tok:,} out={out_tok:,}")
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return ""
-
-
-def parse_json_response(text: str) -> Optional[dict]:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            pass
-    return None
-
-
 # ─── Excel Styling Constants ─────────────────────────────────────────────────
 
-# Deloitte-inspired palette
 DARK_GREEN = "046A38"
 GREEN = "86BC25"
-LIGHT_GREEN = "C4D600"
-BLACK = "000000"
 WHITE = "FFFFFF"
 LIGHT_GREY = "F2F2F2"
 MID_GREY = "D9D9D9"
@@ -228,11 +83,7 @@ MID_GREY = "D9D9D9"
 HEADER_FILL = PatternFill(start_color=DARK_GREEN, end_color=DARK_GREEN, fill_type="solid")
 HEADER_FONT = Font(name="Arial", bold=True, color=WHITE, size=10)
 TITLE_FONT = Font(name="Arial", bold=True, size=14, color=DARK_GREEN)
-SUBTITLE_FONT = Font(name="Arial", bold=True, size=11, color=BLACK)
 BODY_FONT = Font(name="Arial", size=10, color="333333")
-NUM_FONT = Font(name="Arial", size=10, color="333333")
-ACCENT_FILL = PatternFill(start_color=GREEN, end_color=GREEN, fill_type="solid")
-ACCENT_FONT = Font(name="Arial", bold=True, color=WHITE, size=10)
 ZEBRA_FILL = PatternFill(start_color=LIGHT_GREY, end_color=LIGHT_GREY, fill_type="solid")
 SUCCESS_FILL = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
 FAILURE_FILL = PatternFill(start_color="FFEBEE", end_color="FFEBEE", fill_type="solid")
@@ -242,7 +93,6 @@ THIN_BORDER = Border(
 )
 WRAP_ALIGNMENT = Alignment(wrap_text=True, vertical="top")
 TOP_ALIGNMENT = Alignment(vertical="top")
-CENTER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
 
 def _style_header_row(ws, row: int, max_col: int) -> None:
@@ -275,7 +125,6 @@ def _auto_width(ws, max_width: int = 50, min_width: int = 10) -> None:
 
 
 def _style_data_sheet(ws, n_rows: int, n_cols: int) -> None:
-    """Apply professional styling to the Data sheet: header + zebra stripes + auto-filter."""
     _style_header_row(ws, 1, n_cols)
     for row_idx in range(2, n_rows + 2):
         for col_idx in range(1, n_cols + 1):
@@ -284,9 +133,7 @@ def _style_data_sheet(ws, n_rows: int, n_cols: int) -> None:
             cell.border = THIN_BORDER
             if row_idx % 2 == 0:
                 cell.fill = ZEBRA_FILL
-    # Auto-filter on header row
     ws.auto_filter.ref = f"A1:{get_column_letter(n_cols)}{n_rows + 1}"
-    # Freeze header row
     ws.freeze_panes = "A2"
     _auto_width(ws, max_width=30, min_width=8)
 
@@ -294,15 +141,9 @@ def _style_data_sheet(ws, n_rows: int, n_cols: int) -> None:
 # ─── Export-All: Quick Structured Dump ────────────────────────────────────────
 
 def export_iterations_to_excel(
-    archive_path: str,
-    context_path: str,
-    output_path: str,
+    archive_path: str, context_path: str, output_path: str,
     graphs_folder: str = "workspace/graphs",
 ) -> str:
-    """
-    Export all iterations to a single Excel workbook (no LLM needed).
-    Sheets: Summary, Findings, per-iteration details, Graphs Index.
-    """
     archive_text = read_file(archive_path)
     entries = parse_archive_entries(archive_text)
     if not entries:
@@ -402,8 +243,7 @@ def export_iterations_to_excel(
             df_d = pd.DataFrame(rows)
             df_d.to_excel(writer, sheet_name=sn, index=False, startrow=1)
             wsd = writer.sheets[sn]
-            wsd.cell(row=1, column=1,
-                     value=f"Iteration {it} — {e.get('analysis_type', '')}").font = TITLE_FONT
+            wsd.cell(row=1, column=1, value=f"Iteration {it} — {e.get('analysis_type', '')}").font = TITLE_FONT
             _style_header_row(wsd, 2, 2)
             for r in range(3, len(df_d) + 3):
                 _style_data_cell(wsd, r, 1)
@@ -442,14 +282,6 @@ def export_iterations_to_excel(
 
 
 # ─── Per-Iteration Databook Generator ─────────────────────────────────────────
-#
-# For each successful iteration we produce one standalone .xlsx:
-#   Sheet "Data"             — full raw dataset, styled, with auto-filter & freeze
-#   Sheet(s) for analysis    — LLM-generated openpyxl code that builds analysis
-#                              tables using Excel FORMULAS (SUMIFS, COUNTIFS, etc.)
-#                              referencing the "Data" sheet, so every number is
-#                              traceable back to the source rows.
-#
 
 DATABOOK_SYSTEM_PROMPT = """You are an expert Excel data engineer producing a professional financial
 due diligence databook. You will receive:
@@ -463,72 +295,17 @@ due diligence databook. You will receive:
 Your job: write Python code using openpyxl that OPENS an existing workbook
 (already containing the "Data" sheet) and ADDS one or more analysis sheets.
 
-═══════════════════════════════════════════════════════════════════════
-CRITICAL RULES — READ CAREFULLY
-═══════════════════════════════════════════════════════════════════════
-
-A) FORMULAS, NOT VALUES
-   Every number in your analysis sheets MUST come from an Excel formula that
-   references the "Data" sheet. Use:
-     - SUMIFS, COUNTIFS, AVERAGEIFS for aggregations
-     - SUMPRODUCT for weighted calcs, conditional counts, unique counts
-     - INDEX/MATCH or VLOOKUP for lookups
-     - Simple arithmetic (+, -, /, *) to combine formula cells
-   NEVER hard-code numeric results. The user must be able to change a number
-   in the Data sheet and see the analysis update automatically.
-
-B) REFERENCE FORMAT
-   Use the pattern:  Data!$C$2:$C${n+1}  where n = total data rows (provided).
-   Always anchor column references with $ (e.g., Data!$C$2:$C$101).
-   The variable `n` (total data rows) will be passed to your code.
-
-C) STRUCTURE
-   - Your code receives: wb (the open workbook), n (total data rows), col_map (dict of
-     column_name → Excel letter, e.g. {"Revenue": "D", "Client": "B"}).
-   - Create sheets with ws = wb.create_sheet("Sheet Name")
-   - Write headers, then formulas.
-   - Do NOT touch the "Data" sheet (it's already complete).
-   - Do NOT save or close the workbook — the caller handles that.
-
-D) PROFESSIONAL STYLING
-   Apply clean, professional formatting:
-   - Use openpyxl.styles (Font, PatternFill, Border, Alignment, numbers)
-   - Dark green headers (#046A38, white bold text)
-   - Zebra striping on data rows (light grey #F2F2F2 on even rows)
-   - Thin grey borders (#D9D9D9)
-   - Number format "#,##0" for integers, "#,##0.00" for decimals,
-     '€#,##0' or '€#,##0.0,"k"' for currency
-   - Percentage format "0.0%"
-   - Column widths set appropriately
-   - Freeze panes on header row
-   - Titles in row 1 (merged across columns, bold, 14pt dark green)
-
-E) SHEET NAMING
-   Name sheets descriptively (max 31 chars). Examples:
-   "Revenue by Year", "Top 20 Clients", "Channel Mix", "Seasonality"
-
-F) RETURN FORMAT
-   Return ONLY a JSON object:
-   {
-     "sheets": ["Sheet Name 1", "Sheet Name 2"],
-     "code": "python code as a string"
-   }
-   The code must define a function: def build_analysis(wb, n, col_map):
-   No preamble. No markdown fences around the JSON.
-
-G) KEEP IT FOCUSED
-   Only create sheets relevant to THIS specific analysis iteration.
-   Typically 1-3 sheets per iteration. Quality over quantity.
-"""
+CRITICAL RULES:
+A) FORMULAS, NOT VALUES — Every number must come from an Excel formula referencing the Data sheet.
+B) REFERENCE FORMAT — Use Data!$C$2:$C${n+1} with anchored column references.
+C) STRUCTURE — Your code receives: wb, n, col_map. Create sheets, write headers + formulas.
+D) PROFESSIONAL STYLING — Dark green headers, zebra striping, thin borders, number formats.
+E) SHEET NAMING — Max 31 chars, descriptive names.
+F) RETURN FORMAT — JSON: {"sheets": [...], "code": "def build_analysis(wb, n, col_map): ..."}
+G) KEEP IT FOCUSED — 1-3 sheets per iteration."""
 
 
 def _get_data_schema(data_file: str) -> tuple:
-    """
-    Read the data file and return:
-      - df: the full DataFrame
-      - col_map: dict of {column_name: Excel letter}
-      - schema_text: human-readable schema description for the LLM
-    """
     df = pd.read_excel(data_file)
     col_map = {}
     schema_lines = []
@@ -539,44 +316,32 @@ def _get_data_schema(data_file: str) -> tuple:
         sample = str(df[col].iloc[0]) if len(df) > 0 else ""
         sample2 = str(df[col].iloc[min(1, len(df) - 1)]) if len(df) > 1 else ""
         schema_lines.append(f"  Column {letter}: \"{col}\" ({dtype}) — e.g. {sample}, {sample2}")
-
     schema_text = (
         f"Total rows: {len(df)} (data in rows 2..{len(df)+1}, headers in row 1)\n"
-        f"Total columns: {len(df.columns)}\n"
-        + "\n".join(schema_lines)
+        f"Total columns: {len(df.columns)}\n" + "\n".join(schema_lines)
     )
     return df, col_map, schema_text
 
 
 def _write_data_sheet(wb, df: pd.DataFrame) -> None:
-    """Write the raw DataFrame to the 'Data' sheet with professional styling."""
     ws = wb.active
     ws.title = "Data"
-
-    # Write headers
     for col_idx, col_name in enumerate(df.columns, 1):
         ws.cell(row=1, column=col_idx, value=col_name)
-
-    # Write data rows
     for row_idx, row in enumerate(df.itertuples(index=False), 2):
         for col_idx, value in enumerate(row, 1):
             cell = ws.cell(row=row_idx, column=col_idx)
-            # Handle NaN/NaT
             if pd.isna(value):
                 cell.value = None
             else:
                 cell.value = value
-
-    # Style it
     _style_data_sheet(ws, len(df), len(df.columns))
 
 
 def _build_iteration_context(entry: dict) -> str:
-    """Build the LLM user message for a single iteration."""
     eval_fields = _parse_evaluation_fields(entry.get("evaluation", ""))
     findings = eval_fields.get("key_findings", [])
     findings_str = "\n".join(f"  - {f}" for f in findings) if findings else "(none)"
-
     return f"""## Analysis Iteration {entry.get('iteration', '?')}
 
 Type: {entry.get('analysis_type', 'unknown')}
@@ -602,34 +367,18 @@ Quality: {eval_fields.get('quality', '')}
 
 
 def generate_single_databook(
-    client: anthropic.Anthropic,
-    model: str,
-    entry: dict,
-    data_file: str,
-    output_dir: str,
-    max_tokens: int = 16000,
+    client, model: str, entry: dict, data_file: str,
+    output_dir: str, max_tokens: int = 16000,
 ) -> str:
-    """
-    Generate one professional databook for a single successful iteration.
-
-    Creates an .xlsx with:
-      - "Data" sheet: full raw dataset with styling, auto-filter, freeze panes
-      - Analysis sheets: formula-linked to Data sheet, generated by LLM
-
-    Returns the path of the created file, or empty string on failure.
-    """
     iter_num = int(entry.get("iteration", 0))
     analysis_type = entry.get("analysis_type", "unknown")
     safe_type = re.sub(r"[^\w\s-]", "", analysis_type).strip().replace(" ", "_")[:30]
-
     output_filename = f"databook_iter{iter_num:02d}_{safe_type}.xlsx"
     output_path = os.path.join(output_dir, output_filename)
 
     logger.info(f"\n{'─' * 50}")
     logger.info(f"[Databook] Iteration {iter_num}: {analysis_type}")
-    logger.info(f"[Databook] Output: {output_path}")
 
-    # ── Step 1: Read data and build schema ────────────────────────────────
     try:
         df, col_map, schema_text = _get_data_schema(data_file)
     except Exception as e:
@@ -638,18 +387,14 @@ def generate_single_databook(
 
     n = len(df)
 
-    # ── Step 2: Create workbook with Data sheet ───────────────────────────
     from openpyxl import Workbook
     wb = Workbook()
     _write_data_sheet(wb, df)
-
-    # Save the base workbook (Data sheet only) — LLM code will add to it
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     wb.close()
     logger.info(f"  [Databook] Data sheet written ({n} rows, {len(df.columns)} cols)")
 
-    # ── Step 3: Call LLM to generate analysis sheets ──────────────────────
     iteration_context = _build_iteration_context(entry)
     col_map_str = json.dumps(col_map, indent=2)
 
@@ -663,32 +408,22 @@ def generate_single_databook(
 
 {iteration_context}
 
-Write a `build_analysis(wb, n, col_map)` function that adds analysis sheets
-to the workbook. Use Excel formulas referencing the Data sheet for ALL numbers.
-Keep it focused on this specific analysis — typically 1-3 sheets."""
+Write a `build_analysis(wb, n, col_map)` function that adds analysis sheets.
+Use Excel formulas referencing the Data sheet for ALL numbers."""
 
-    response = call_llm(
-        client, DATABOOK_SYSTEM_PROMPT, user_msg, model, max_tokens,
-        tag=f"Databook-Iter{iter_num}",
-    )
-
+    response = call_llm(client, DATABOOK_SYSTEM_PROMPT, user_msg, model, max_tokens, tag=f"Databook-Iter{iter_num}")
     parsed = parse_json_response(response)
     if parsed is None:
         logger.error(f"  [Databook] Failed to parse LLM response for iteration {iter_num}")
-        # Still return the file with just the Data sheet
         return output_path
 
-    sheets = parsed.get("sheets", [])
     code = parsed.get("code", "")
-
     if not code:
         logger.warning(f"  [Databook] LLM returned no code for iteration {iter_num}")
         return output_path
 
-    logger.info(f"  [Databook] Planned sheets: {sheets}")
+    logger.info(f"  [Databook] Planned sheets: {parsed.get('sheets', [])}")
 
-    # ── Step 4: Execute the LLM-generated code ───────────────────────────
-    # Wrap the code in a script that opens the workbook, calls build_analysis, saves
     wrapper_script = f'''import json
 import sys
 from openpyxl import load_workbook
@@ -709,10 +444,8 @@ try:
     print(f"Sheets: {{[s.title for s in wb.worksheets]}}")
 except Exception as e:
     print(f"ERROR: {{e}}", file=sys.stderr)
-    # Still try to save what we have
     try:
         wb.save("{output_path}")
-        print("Partial save completed", file=sys.stderr)
     except:
         pass
     sys.exit(1)
@@ -735,29 +468,22 @@ finally:
             )
         except subprocess.TimeoutExpired:
             logger.error(f"  [Databook] Timed out for iteration {iter_num}")
-            return output_path  # Return with Data sheet only
+            return output_path
 
         if result.stdout:
             logger.info(f"  [Databook] {result.stdout.strip()}")
-
         if not result.stderr:
-            break  # Success
+            break
 
         if attempt >= 2:
             logger.error(f"  [Databook] Failed after retry:\n{result.stderr[:500]}")
-            return output_path  # Return with Data sheet only
+            return output_path
 
-        # Ask LLM to fix
         logger.warning(f"  [Databook] Error (attempt {attempt}):\n{result.stderr[:400]}")
-        logger.info("  [Databook] Asking LLM to fix...")
-
         fix_msg = f"""The build_analysis code produced an error. Fix it.
 
 ## Error
 {result.stderr}
-
-## stdout
-{result.stdout[:500] if result.stdout else '(none)'}
 
 ## Original Code
 ```python
@@ -774,10 +500,7 @@ finally:
 
 Return ONLY a JSON object: {{"sheets": [...], "code": "fixed code"}}"""
 
-        fix_response = call_llm(
-            client, DATABOOK_SYSTEM_PROMPT, fix_msg, model, max_tokens,
-            tag=f"DatabookFix-Iter{iter_num}",
-        )
+        fix_response = call_llm(client, DATABOOK_SYSTEM_PROMPT, fix_msg, model, max_tokens, tag=f"DatabookFix-Iter{iter_num}")
         fix_parsed = parse_json_response(fix_response)
         if fix_parsed and fix_parsed.get("code"):
             code = fix_parsed["code"]
@@ -814,41 +537,24 @@ finally:
             logger.error("  [Databook] Failed to parse fix response")
             return output_path
 
-    # Verify and report
     if Path(output_path).exists():
         size_kb = Path(output_path).stat().st_size / 1024
         try:
             check_wb = load_workbook(output_path, read_only=True)
             sheet_names = [s.title for s in check_wb.worksheets]
             check_wb.close()
-            logger.info(
-                f"  [Databook] DONE — {output_path} ({size_kb:.1f} KB) "
-                f"Sheets: {sheet_names}"
-            )
+            logger.info(f"  [Databook] DONE — {output_path} ({size_kb:.1f} KB) Sheets: {sheet_names}")
         except Exception:
             logger.info(f"  [Databook] DONE — {output_path} ({size_kb:.1f} KB)")
         return output_path
-
     return ""
 
 
 def generate_databooks(
-    client: anthropic.Anthropic,
-    model: str,
-    archive_path: str,
-    data_file: str,
-    output_dir: str,
-    max_tokens: int = 16000,
+    client, model: str, archive_path: str, data_file: str,
+    output_dir: str, max_tokens: int = 16000,
     only_iteration: Optional[int] = None,
 ) -> list:
-    """
-    Generate one databook per successful iteration.
-
-    Args:
-        only_iteration: If set, only generate for this specific iteration number.
-
-    Returns list of created file paths.
-    """
     if not Path(archive_path).exists():
         logger.error("[Databook] No archive found. Run data analysis first.")
         return []
@@ -876,10 +582,7 @@ def generate_databooks(
     for i, entry in enumerate(success_entries, 1):
         iter_num = entry.get("iteration", "?")
         logger.info(f"\n[Databook] Processing {i}/{len(success_entries)} (Iteration {iter_num})...")
-
-        result = generate_single_databook(
-            client, model, entry, data_file, output_dir, max_tokens
-        )
+        result = generate_single_databook(client, model, entry, data_file, output_dir, max_tokens)
         if result:
             created.append(result)
 
@@ -889,7 +592,6 @@ def generate_databooks(
         size_kb = Path(p).stat().st_size / 1024
         logger.info(f"  {Path(p).name} ({size_kb:.1f} KB)")
     logger.info(f"{'═' * 60}")
-
     return created
 
 
@@ -897,27 +599,15 @@ def generate_databooks(
 
 def main() -> None:
     import argparse
-
-    parser = argparse.ArgumentParser(
-        description="DDAnalyze Excel Export & Databook Generator"
-    )
-    parser.add_argument(
-        "--databook", action="store_true",
-        help="Generate per-iteration databooks with Data + formula-linked analysis sheets",
-    )
-    parser.add_argument(
-        "--output", "-o", type=str, default=None,
-        help="Output path (file for export-all, directory for databook)",
-    )
-    parser.add_argument(
-        "-n", "--iteration", type=int, default=None,
-        help="Only generate databook for this iteration number",
-    )
+    parser = argparse.ArgumentParser(description="DDAnalyze Excel Export & Databook Generator")
+    parser.add_argument("--databook", action="store_true")
+    parser.add_argument("--output", "-o", type=str, default=None)
+    parser.add_argument("-n", "--iteration", type=int, default=None)
     args = parser.parse_args()
 
-    config = yaml.safe_load(read_file("config.yaml"))
+    config = load_config()
     debug_logging = config.get("debug_logging", False)
-    log_file = setup_logging(debug=debug_logging)
+    setup_logging("excel_export", debug=debug_logging)
 
     archive_path = config.get("archive_file", "full_archive.txt")
     context_path = config.get("active_context_file", "active_context.md")
@@ -926,7 +616,6 @@ def main() -> None:
 
     if not Path(archive_path).exists():
         logger.error(f"Archive not found: {archive_path}")
-        logger.error("Run data analysis first (python loop.py or python orchestrator.py)")
         sys.exit(1)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -939,14 +628,11 @@ def main() -> None:
         model = config.get("model", "claude-sonnet-4-6")
         max_tokens = config.get("databook_max_tokens", 16000)
         output_dir = args.output or f"workspace/exports/databooks_{timestamp}"
-
-        client = anthropic.Anthropic(api_key=API_KEY)
-
+        client = create_client()
         results = generate_databooks(
             client, model, archive_path, data_file, output_dir, max_tokens,
             only_iteration=args.iteration,
         )
-
         if results:
             print(f"\n{len(results)} databook(s) created in {output_dir}/")
             for p in results:
@@ -956,16 +642,7 @@ def main() -> None:
             sys.exit(1)
     else:
         output_path = args.output or f"workspace/exports/iterations_export_{timestamp}.xlsx"
-
-        logger.info(f"\n{'═' * 60}")
-        logger.info("DDAnalyze EXCEL EXPORT")
-        logger.info(f"Output : {output_path}")
-        logger.info(f"Log    : {log_file}")
-        logger.info(f"{'═' * 60}")
-
-        result = export_iterations_to_excel(
-            archive_path, context_path, output_path, graphs_folder
-        )
+        result = export_iterations_to_excel(archive_path, context_path, output_path, graphs_folder)
         if result:
             print(f"\nExport created: {result}")
         else:
