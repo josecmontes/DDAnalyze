@@ -49,7 +49,7 @@ phase2_section_max_tokens: 8000
 phase2_summary_max_tokens: 4000
 
 # ─── Excel Export & Databook ─────────────────────────────────────────────────
-databook_max_tokens: 20000              # Token budget for databook LLM call
+databook_max_tokens: 16000              # Token budget for each per-iteration databook LLM call
 
 # ─── Orchestrator ────────────────────────────────────────────────────────────
 orchestrator_schedule:
