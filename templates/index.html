@@ -704,6 +704,26 @@
         </div>
 
         <div class="panel-section">
+            <div class="panel-title">Ad-hoc Analysis</div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <input type="text" id="adhocInput" placeholder="e.g. Price x Volume decomposition"
+                    style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+                           padding:8px 10px; color:var(--text); font-size:0.8rem; width:100%;"
+                    onkeydown="if(event.key==='Enter')runAdhocAnalysis()">
+                <div style="display:flex; gap:6px;">
+                    <button class="quick-action" style="flex:1;" onclick="runAdhocAnalysis()">
+                        <span class="qa-icon">&#9881;</span>
+                        <span>Run Analysis</span>
+                    </button>
+                    <button class="quick-action" style="flex:1;" onclick="runAdhocResearch()">
+                        <span class="qa-icon">&#127760;</span>
+                        <span>Run Research</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-section">
             <div class="panel-title">Quick Actions</div>
             <div class="quick-actions">
                 <button class="quick-action" onclick="quickAction('analyze', 5)">
@@ -714,9 +734,9 @@
                     <span class="qa-icon">&#127760;</span>
                     <span>Run 3 Web Researches</span>
                 </button>
-                <button class="quick-action" onclick="quickAction('report', 0)">
-                    <span class="qa-icon">&#128196;</span>
-                    <span>Generate Report</span>
+                <button class="quick-action" onclick="sendCommand('/refresh-report')">
+                    <span class="qa-icon">&#128260;</span>
+                    <span>Refresh Reports (MD + HTML)</span>
                 </button>
                 <button class="quick-action" onclick="quickAction('deloitte', 0)">
                     <span class="qa-icon">&#9733;</span>
@@ -926,6 +946,23 @@
         } catch (e) {
             appendChatSystem('Failed to cancel: ' + e.message);
         }
+    }
+
+    // ── Ad-hoc Analysis ─────────────────────────────────────
+    function runAdhocAnalysis() {
+        const input = document.getElementById('adhocInput');
+        const desc = input.value.trim();
+        if (!desc) { appendChatSystem('Please enter an analysis description.'); return; }
+        sendCommand('/analyze ' + desc);
+        input.value = '';
+    }
+
+    function runAdhocResearch() {
+        const input = document.getElementById('adhocInput');
+        const desc = input.value.trim();
+        if (!desc) { appendChatSystem('Please enter a research topic.'); return; }
+        sendCommand('/research ' + desc);
+        input.value = '';
     }
 
     // ── Quick Actions ────────────────────────────────────────

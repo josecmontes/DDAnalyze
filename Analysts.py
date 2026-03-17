@@ -20,6 +20,7 @@ os.chdir(Path(__file__).parent)
 from utils import (
     read_file, write_file, append_file, load_config, setup_logging,
     call_llm_with_tokens, parse_json_response, create_client,
+    get_current_iteration,
 )
 
 logger = logging.getLogger("ddanalyze.loop")
@@ -284,7 +285,7 @@ def build_analyst_user_message(
 {context}
 
 ## Iteration Info
-- Current iteration: {iteration} of {n}
+- Iteration ID: {iteration}
 - Data file path (use exactly): {data_file}
 - Load data with: df = pd.read_excel("{data_file}")
 - Graphs folder (save charts here): {graphs_folder}
@@ -563,7 +564,7 @@ def update_active_context_failure(
 
 def _format_archive_entry(
     iteration: int, parsed: dict, stdout: str, stderr: str,
-    evaluation: dict, error_label: str = None,
+    evaluation: dict, error_label: str = None, source: str = "scheduled",
 ) -> str:
     sep_major = "=" * 80
     sep_minor = "-" * 80
@@ -572,7 +573,7 @@ def _format_archive_entry(
     if error_label:
         return "\n".join([
             sep_major, f"ITERATION: {iteration}", f"DATE: {now}",
-            f"STATUS: {error_label}", sep_minor,
+            f"STATUS: {error_label}", f"SOURCE: {source}", sep_minor,
             "RAW RESPONSE / ERROR:", stdout or "(none)",
             "", "STDERR:", stderr or "(none)", sep_major, "",
         ])
@@ -581,6 +582,7 @@ def _format_archive_entry(
     lines = [
         sep_major, f"ITERATION: {iteration}", f"DATE: {now}",
         f"STATUS: {status}",
+        f"SOURCE: {source}",
         f"ANALYSIS TYPE: {parsed.get('analysis_type', 'unknown')}",
         f"HYPOTHESIS: {parsed.get('hypothesis', '')}",
         f"COLUMNS USED: {', '.join(parsed.get('columns_used', []))}",
@@ -672,11 +674,13 @@ def main() -> None:
     archive_path = config["archive_file"]
     context_path = config["active_context_file"]
     task_path = config["task_file"]
-    script_path = config["workspace_script"]
     summarizer_every = config.get("summarizer_every_n", 10)
     max_code_retries = config.get("max_code_retries", 2)
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+    data_file = config.get("data_file", "workspace/data.xlsx")
     debug_logging = config.get("debug_logging", False)
+    source = config.get("analysis_source", "scheduled")
+    auto_xlsx = config.get("auto_xlsx", True)
 
     log_file = setup_logging("loop", debug=debug_logging)
 
@@ -712,26 +716,39 @@ def main() -> None:
         write_file(context_path, new_ctx)
         logger.info("[summarize_on_start] active_context.md reconstructed from archive")
 
+    # ── Global iteration numbering: continue from where the archive left off ──
+    start_iteration = get_current_iteration(archive_path)
+
     logger.info(f"\n{'=' * 60}")
     logger.info("AUTONOMOUS DATA ANALYSIS LOOP")
     logger.info(f"Model  : {model}")
     logger.info(f"Runs   : {n_iterations}  |  Mode: {config['repetition_mode']}")
+    logger.info(f"Source : {source}")
+    logger.info(f"Iters  : {start_iteration + 1}..{start_iteration + n_iterations} (global)")
     logger.info(f"Interval: {config['interval_minutes']} min  |  Summarizer every {summarizer_every} iters")
     logger.info(f"Retries : up to {max_code_retries} per iteration")
     logger.info(f"Tokens  : analyst={analyst_max_tokens}  critic={max_tokens}")
     logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Auto xlsx: {'ON' if auto_xlsx else 'OFF'}")
     logger.info(f"Log     : {log_file}")
     logger.info(f"Debug   : {'ON' if debug_logging else 'OFF'}")
     logger.info(f"{'=' * 60}")
 
     logger.debug(f"[Config] Full settings: {json.dumps(config, indent=2)}")
 
+    # Late import to avoid circular dependency
+    from excel_export import generate_iteration_xlsx
+
     total_input_tokens = 0
     total_output_tokens = 0
 
-    for iteration in range(1, n_iterations + 1):
+    for local_iter in range(1, n_iterations + 1):
+        iteration = start_iteration + local_iter  # globally unique ID
         iter_start = time.time()
-        logger.info(f"\n=== ITERATION {iteration} / {n_iterations} ===")
+        logger.info(f"\n=== ITERATION {iteration} (run {local_iter}/{n_iterations}) ===")
+
+        # Per-iteration script path (never overwrite previous scripts)
+        iter_script_path = os.path.join("workspace", f"analysis_iter{iteration:03d}.py")
 
         try:
             context = read_file(context_path)
@@ -749,7 +766,7 @@ def main() -> None:
 
             if parsed is None:
                 logger.error("  [ERROR] Analyst returned invalid JSON — skipping iteration")
-                entry = _format_archive_entry(iteration, None, raw_analyst, "", None, "JSON_PARSE_ERROR")
+                entry = _format_archive_entry(iteration, None, raw_analyst, "", None, "JSON_PARSE_ERROR", source)
                 append_file(archive_path, entry)
                 continue
 
@@ -758,13 +775,13 @@ def main() -> None:
             logger.info(f"  [Analyst] Type : {analysis_type}")
             logger.info(f"  [Analyst] Hypo : {hypothesis[:120]}")
 
-            write_file(script_path, parsed.get("code", ""))
-            logger.info(f"  [Runner] Executing {script_path}...")
-            stdout, stderr = run_code(script_path)
+            write_file(iter_script_path, parsed.get("code", ""))
+            logger.info(f"  [Runner] Executing {iter_script_path}...")
+            stdout, stderr = run_code(iter_script_path)
 
             if "TIMEOUT" in stderr:
                 logger.error("  [ERROR] Script timed out")
-                entry = _format_archive_entry(iteration, parsed, stdout, stderr, None, "TIMEOUT")
+                entry = _format_archive_entry(iteration, parsed, stdout, stderr, None, "TIMEOUT", source)
                 append_file(archive_path, entry)
                 continue
 
@@ -792,9 +809,9 @@ def main() -> None:
                     break
 
                 parsed = parsed_retry
-                write_file(script_path, parsed.get("code", ""))
+                write_file(iter_script_path, parsed.get("code", ""))
                 logger.info(f"  [Retry {retry_count}] Re-executing fixed code...")
-                stdout, stderr = run_code(script_path)
+                stdout, stderr = run_code(iter_script_path)
 
                 if "TIMEOUT" in stderr:
                     logger.warning(f"  [Retry {retry_count}] Timed out after fix — stopping retries")
@@ -820,7 +837,7 @@ def main() -> None:
             evaluation = parse_json_response(raw_critic, tag="Critic")
             if evaluation is None:
                 logger.error("  [ERROR] Critic returned invalid JSON — logging and continuing")
-                entry = _format_archive_entry(iteration, parsed, stdout, stderr, None, "CRITIC_JSON_PARSE_ERROR")
+                entry = _format_archive_entry(iteration, parsed, stdout, stderr, None, "CRITIC_JSON_PARSE_ERROR", source)
                 append_file(archive_path, entry)
                 continue
 
@@ -833,7 +850,7 @@ def main() -> None:
                 + (f" | Dead ends confirmed: {dead_ends_count}" if dead_ends_count else "")
             )
 
-            entry = _format_archive_entry(iteration, parsed, stdout, stderr, evaluation)
+            entry = _format_archive_entry(iteration, parsed, stdout, stderr, evaluation, source=source)
             append_file(archive_path, entry)
 
             if status == "success":
@@ -844,11 +861,22 @@ def main() -> None:
                 update_active_context_failure(context_path, iteration, parsed, evaluation)
                 logger.info(f"  [Context] Logged failure: {evaluation.get('error_type', 'unknown')}")
 
-            if iteration % summarizer_every == 0 and iteration < n_iterations:
+            # ── Auto-generate per-iteration xlsx ──
+            if auto_xlsx and Path(data_file).exists():
+                try:
+                    xlsx_path = generate_iteration_xlsx(
+                        iteration, parsed, stdout, data_file,
+                    )
+                    if xlsx_path:
+                        logger.info(f"  [Excel] Auto-generated: {xlsx_path}")
+                except Exception as xlsx_exc:
+                    logger.warning(f"  [Excel] Auto-generation failed: {xlsx_exc}")
+
+            if local_iter % summarizer_every == 0 and local_iter < n_iterations:
                 ctx_before = read_file(context_path)
                 logger.info("  [Summarizer] Compressing active_context.md...")
                 summarizer_msg = (
-                    f"Current iteration: {iteration} of {n_iterations} total.\n\n"
+                    f"Current iteration: {iteration} (run {local_iter} of {n_iterations}).\n\n"
                     + ctx_before
                 )
                 new_ctx, in_tok, out_tok = call_llm_with_tokens(
@@ -865,7 +893,7 @@ def main() -> None:
             break
         except Exception as exc:
             logger.error(f"  [FATAL ERROR] Iteration {iteration}: {exc}", exc_info=True)
-            error_entry = _format_archive_entry(iteration, None, str(exc), "", None, "FATAL_ERROR")
+            error_entry = _format_archive_entry(iteration, None, str(exc), "", None, "FATAL_ERROR", source)
             append_file(archive_path, error_entry)
 
         iter_elapsed = time.time() - iter_start
@@ -874,7 +902,7 @@ def main() -> None:
             f"cumulative tokens in={total_input_tokens:,} out={total_output_tokens:,}"
         )
 
-        if iteration < n_iterations:
+        if local_iter < n_iterations:
             wait_sec = config["interval_minutes"] * 60
             if wait_sec > 0:
                 logger.info(f"  [Wait] Sleeping {config['interval_minutes']} minute(s)...")
@@ -882,6 +910,7 @@ def main() -> None:
 
     logger.info(f"\n{'=' * 60}")
     logger.info("LOOP COMPLETE")
+    logger.info(f"Iterations: {start_iteration + 1}..{start_iteration + n_iterations} (global)")
     logger.info(f"Archive : {archive_path}")
     logger.info(f"Context : {context_path}")
     logger.info(f"Graphs  : {graphs_folder}")

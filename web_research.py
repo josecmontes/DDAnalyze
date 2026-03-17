@@ -21,6 +21,7 @@ os.chdir(Path(__file__).parent)
 from utils import (
     read_file, write_file, append_file, load_config, setup_logging,
     call_llm_with_tokens, parse_json_response, create_client,
+    get_current_iteration,
 )
 
 logger = logging.getLogger("ddanalyze.web_research")
@@ -508,10 +509,14 @@ def main() -> None:
     if not Path(web_archive_path).exists():
         write_file(web_archive_path, "")
 
+    # ── Global iteration numbering: continue from where the archive left off ──
+    start_iteration = get_current_iteration(web_archive_path)
+
     logger.info(f"\n{'=' * 60}")
     logger.info("AUTONOMOUS WEB RESEARCH LOOP")
     logger.info(f"Model   : {model}")
     logger.info(f"Runs    : {n_iterations}  |  Summarizer every {summarizer_every} iters")
+    logger.info(f"Iters   : {start_iteration + 1}..{start_iteration + n_iterations} (global)")
     logger.info(f"Tokens  : researcher={researcher_max_tokens}  search={search_max_tokens}  synthesizer={max_tokens}")
     logger.info(f"Context : {web_context_path}")
     logger.info(f"Archive : {web_archive_path}")
@@ -523,9 +528,10 @@ def main() -> None:
     total_input_tokens = 0
     total_output_tokens = 0
 
-    for iteration in range(1, n_iterations + 1):
+    for local_iter in range(1, n_iterations + 1):
+        iteration = start_iteration + local_iter  # globally unique ID
         iter_start = time.time()
-        logger.info(f"\n=== WEB RESEARCH ITERATION {iteration} / {n_iterations} ===")
+        logger.info(f"\n=== WEB RESEARCH ITERATION {iteration} (run {local_iter}/{n_iterations}) ===")
 
         try:
             web_context = read_file(web_context_path)
@@ -601,7 +607,7 @@ def main() -> None:
                 update_web_context_failure(web_context_path, iteration, parsed, evaluation)
                 logger.info("  [Context] Logged failure")
 
-            if iteration % summarizer_every == 0 and iteration < n_iterations:
+            if local_iter % summarizer_every == 0 and local_iter < n_iterations:
                 ctx_before = read_file(web_context_path)
                 logger.info("  [Summarizer] Compressing web research context...")
                 summarizer_msg = (
@@ -632,12 +638,13 @@ def main() -> None:
         )
 
         wait_min = config.get("web_research_interval_minutes", config.get("interval_minutes", 0))
-        if iteration < n_iterations and wait_min > 0:
+        if local_iter < n_iterations and wait_min > 0:
             logger.info(f"  [Wait] Sleeping {wait_min} minute(s)...")
             time.sleep(wait_min * 60)
 
     logger.info(f"\n{'=' * 60}")
     logger.info("WEB RESEARCH LOOP COMPLETE")
+    logger.info(f"Iterations: {start_iteration + 1}..{start_iteration + n_iterations} (global)")
     logger.info(f"Archive : {web_archive_path}")
     logger.info(f"Context : {web_context_path}")
     logger.info(f"Log     : {log_file}")
