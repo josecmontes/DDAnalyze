@@ -16,24 +16,20 @@ import json
 import logging
 import os
 import queue
-import re
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-import anthropic
-import yaml
-from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
 
 from excel_export import export_iterations_to_excel, generate_databook
-
-load_dotenv()
-API_KEY = os.getenv("API_KEY")
+from utils import (
+    read_file, write_file, load_config, call_llm, parse_json_response,
+    parse_archive_all, get_current_iteration, create_client,
+)
 
 os.chdir(Path(__file__).parent)
 
@@ -63,8 +59,8 @@ app = Flask(__name__)
 
 # ─── Global State ─────────────────────────────────────────────────────────────
 
-_config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
-_client = anthropic.Anthropic(api_key=API_KEY)
+_config = load_config()
+_client = create_client()
 _model = _config.get("model", "claude-sonnet-4-6")
 
 # Event bus: SSE subscribers get events pushed here
@@ -104,120 +100,6 @@ def _log_and_broadcast(msg: str, level: str = "info") -> None:
         if len(_pipeline_state["log"]) > 500:
             _pipeline_state["log"] = _pipeline_state["log"][-300:]
     _broadcast("log", {"message": msg, "level": level})
-
-
-# ─── File Utilities ───────────────────────────────────────────────────────────
-
-def read_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-def write_file(path: str, content: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-# ─── Archive Utilities ────────────────────────────────────────────────────────
-
-_INTERNAL_ERROR_LABELS = {
-    "JSON_PARSE_ERROR", "CRITIC_JSON_PARSE_ERROR", "TIMEOUT", "FATAL_ERROR",
-    "SYNTH_JSON_PARSE_ERROR",
-}
-
-
-def parse_archive_all(archive_text: str) -> list:
-    separator = "=" * 80
-    entries = []
-    for block in archive_text.split(separator):
-        block = block.strip()
-        if not block or "ITERATION:" not in block:
-            continue
-        status_match = re.search(r"\nSTATUS:\s*(\S+)", block)
-        if not status_match:
-            continue
-        status = status_match.group(1).strip()
-        if status.upper() in _INTERNAL_ERROR_LABELS:
-            continue
-        entry = {"status": status}
-        for field, pattern in [
-            ("iteration", r"ITERATION:\s*(\d+)"),
-            ("date", r"DATE:\s*(.+)"),
-            ("analysis_type", r"ANALYSIS TYPE:\s*(.+)"),
-            ("hypothesis", r"HYPOTHESIS:\s*(.+)"),
-            ("columns_used", r"COLUMNS USED:\s*(.+)"),
-        ]:
-            m = re.search(pattern, block)
-            if m:
-                entry[field] = m.group(1).strip()
-        dash_sep = "-" * 80
-        code_m = re.search(r"CODE:\n(.*?)\n" + re.escape(dash_sep), block, re.DOTALL)
-        if code_m:
-            entry["code"] = code_m.group(1).strip()
-        output_m = re.search(
-            r"OUTPUT:\n(.*?)(?:\n" + re.escape(dash_sep) + r"|\Z)", block, re.DOTALL
-        )
-        if output_m:
-            entry["output"] = output_m.group(1).strip()
-        eval_m = re.search(r"EVALUATION:\n(.*?)(?:\Z)", block, re.DOTALL)
-        if eval_m:
-            entry["evaluation"] = eval_m.group(1).strip()
-        if "iteration" in entry:
-            entries.append(entry)
-    return entries
-
-
-def _get_current_iteration(archive_path: str) -> int:
-    if not Path(archive_path).exists():
-        return 0
-    text = read_file(archive_path)
-    iters = re.findall(r"ITERATION:\s*(\d+)", text)
-    return max(int(i) for i in iters) if iters else 0
-
-
-# ─── LLM Utilities ───────────────────────────────────────────────────────────
-
-def call_llm(system: str, user: str, max_tokens: int, tag: str = "LLM") -> str:
-    logger.debug(f"[{tag}] Sending request | system={len(system):,}ch user={len(user):,}ch")
-    t0 = time.time()
-    with _client.messages.stream(
-        model=_model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    ) as stream:
-        response = stream.get_final_message()
-    elapsed = time.time() - t0
-    in_tok = response.usage.input_tokens
-    out_tok = response.usage.output_tokens
-    logger.info(f"  [{tag}] Done in {elapsed:.1f}s | tokens in={in_tok:,} out={out_tok:,}")
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return ""
-
-
-def parse_json_response(text: str) -> Optional[dict]:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            pass
-    return None
 
 
 # ─── Phase Runners (subprocess) ──────────────────────────────────────────────
@@ -543,7 +425,7 @@ def _process_guidance(user_input: str) -> Optional[dict]:
 ## Current Web Research Knowledge Base
 {web_context[:4000]}"""
 
-    response = call_llm(GUIDANCE_SYSTEM_PROMPT, user_msg, 4000, tag="Guidance")
+    response = call_llm(_client, GUIDANCE_SYSTEM_PROMPT, user_msg, _model, 4000, tag="Guidance")
     return parse_json_response(response)
 
 
@@ -595,7 +477,7 @@ def _get_status() -> dict:
         entries = parse_archive_all(archive_text)
         success = sum(1 for e in entries if e.get("status", "").lower() == "success")
         failed = sum(1 for e in entries if e.get("status", "").lower() != "success")
-        total = _get_current_iteration(archive_path)
+        total = get_current_iteration(archive_path)
         types = sorted(set(
             e.get("analysis_type", "unknown")
             for e in entries if e.get("status", "").lower() == "success"
@@ -607,15 +489,10 @@ def _get_status() -> dict:
         status["data_analysis"] = {"total": 0, "success": 0, "failed": 0, "types": []}
 
     web_archive_path = _config.get("web_research_archive_file", "web_research_archive.txt")
-    if Path(web_archive_path).exists():
-        web_text = read_file(web_archive_path)
-        web_iters = re.findall(r"ITERATION:\s*(\d+)", web_text)
-        status["web_research"] = {"total": len(web_iters)}
-    else:
-        status["web_research"] = {"total": 0}
+    status["web_research"] = {"total": get_current_iteration(web_archive_path)}
 
     status["reports"] = {}
-    for name, path in [("markdown", "final_report.md"), ("docx", "final_report.docx"), ("deloitte", "deloitte_report.html")]:
+    for name, path in [("markdown", "final_report.md"), ("deloitte", "deloitte_report.html")]:
         if Path(path).exists():
             stat = Path(path).stat()
             status["reports"][name] = {
