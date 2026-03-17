@@ -421,8 +421,8 @@
 
         /* ── Right Panel: Reports/Graphs ──────────────────────── */
         .right-panel {
-            width: 360px;
-            min-width: 280px;
+            width: 420px;
+            min-width: 320px;
             border-left: 1px solid var(--border);
             display: flex;
             flex-direction: column;
@@ -479,7 +479,7 @@
         .graph-thumb:hover { outline: 2px solid var(--primary); }
         .graph-thumb img {
             width: 100%;
-            height: 80px;
+            height: 60px;
             object-fit: cover;
             display: block;
         }
@@ -687,42 +687,8 @@
         </div>
     </div>
 
-    <!-- Right Panel: Reports + Graphs + Quick Actions -->
+    <!-- Right Panel: Quick Actions + Ad-hoc + Reports + Graphs -->
     <div class="right-panel">
-        <div class="panel-section">
-            <div class="panel-title">Reports</div>
-            <div id="reportsList">
-                <div style="font-size:0.8rem; color:var(--text-dim);">No reports yet</div>
-            </div>
-        </div>
-
-        <div class="panel-section">
-            <div class="panel-title">Charts</div>
-            <div class="graphs-grid" id="graphsGrid">
-                <div style="font-size:0.8rem; color:var(--text-dim); grid-column:1/-1;">No charts yet</div>
-            </div>
-        </div>
-
-        <div class="panel-section">
-            <div class="panel-title">Ad-hoc Analysis</div>
-            <div style="display:flex; flex-direction:column; gap:6px;">
-                <input type="text" id="adhocInput" placeholder="e.g. Price x Volume decomposition"
-                    style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
-                           padding:8px 10px; color:var(--text); font-size:0.8rem; width:100%;"
-                    onkeydown="if(event.key==='Enter')runAdhocAnalysis()">
-                <div style="display:flex; gap:6px;">
-                    <button class="quick-action" style="flex:1;" onclick="runAdhocAnalysis()">
-                        <span class="qa-icon">&#9881;</span>
-                        <span>Run Analysis</span>
-                    </button>
-                    <button class="quick-action" style="flex:1;" onclick="runAdhocResearch()">
-                        <span class="qa-icon">&#127760;</span>
-                        <span>Run Research</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-
         <div class="panel-section">
             <div class="panel-title">Quick Actions</div>
             <div class="quick-actions">
@@ -750,6 +716,40 @@
                     <span class="qa-icon">&#128218;</span>
                     <span>Generate Databook</span>
                 </button>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-title">Ad-hoc Analysis</div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <input type="text" id="adhocInput" placeholder="e.g. Price x Volume decomposition"
+                    style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+                           padding:8px 10px; color:var(--text); font-size:0.8rem; width:100%;"
+                    onkeydown="if(event.key==='Enter')runAdhocAnalysis()">
+                <div style="display:flex; gap:6px;">
+                    <button class="quick-action" style="flex:1;" onclick="runAdhocAnalysis()">
+                        <span class="qa-icon">&#9881;</span>
+                        <span>Run Analysis</span>
+                    </button>
+                    <button class="quick-action" style="flex:1;" onclick="runAdhocResearch()">
+                        <span class="qa-icon">&#127760;</span>
+                        <span>Run Research</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-title">Reports</div>
+            <div id="reportsList">
+                <div style="font-size:0.8rem; color:var(--text-dim);">No reports yet</div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-title">Charts</div>
+            <div class="graphs-grid" id="graphsGrid">
+                <div style="font-size:0.8rem; color:var(--text-dim); grid-column:1/-1;">No charts yet</div>
             </div>
         </div>
     </div>
