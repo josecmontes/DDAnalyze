@@ -12,6 +12,7 @@ build/
 .env
 .venv/
 venv/
+docs/
 
 # Data (never commit the user's dataset)
 workspace/data.xlsx

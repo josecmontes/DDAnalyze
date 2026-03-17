@@ -26,7 +26,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
 
-from excel_export import export_iterations_to_excel, generate_databook
+from excel_export import export_iterations_to_excel, generate_databooks
 from utils import (
     read_file, write_file, load_config, call_llm, parse_json_response,
     parse_archive_all, get_current_iteration, create_client,
@@ -783,7 +783,7 @@ def api_chat():
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         output_path = f"workspace/exports/databook_{ts}.xlsx"
                         max_tokens = _config.get("databook_max_tokens", 20000)
-                        generate_databook(_client, _model, archive_path, context_path, output_path, max_tokens)
+                        generate_databooks(_client, _model, archive_path, context_path, output_path, max_tokens)
                         _broadcast("log", {"message": f"Databook created: {output_path}", "level": "info"})
                     threading.Thread(target=_do_databook, daemon=True).start()
 
