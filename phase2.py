@@ -5,7 +5,7 @@ Two-step process:
   Step A: Extract all successful analysis code → extracted_code.md
   Step B: LLM synthesises findings into a structured markdown report → final_report.md
 
-Run this manually after loop.py finishes.
+Run this manually after Analysts.py finishes.
 The Deloitte HTML report is generated separately by deloitte_report.py.
 """
 
@@ -571,7 +571,7 @@ def main() -> None:
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
     debug_logging = config.get("debug_logging", False)
 
-    extracted_code_path = "extracted_code.md"
+    extracted_code_path = config.get("extracted_code_file", "extracted_code.md")
     report_md_path = "final_report.md"
 
     log_file = setup_logging("phase2", debug=debug_logging)
@@ -587,7 +587,7 @@ def main() -> None:
     logger.info("=" * 60)
 
     if not Path(archive_path).exists():
-        logger.error(f"ERROR: {archive_path} not found. Run loop.py first.")
+        logger.error(f"ERROR: {archive_path} not found. Run Analysts.py first.")
         sys.exit(1)
 
     archive_text = read_file(archive_path)

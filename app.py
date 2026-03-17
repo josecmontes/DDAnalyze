@@ -19,6 +19,7 @@ import queue
 import subprocess
 import sys
 import threading
+from typing import Optional
 import time
 from datetime import datetime
 from pathlib import Path
@@ -148,7 +149,7 @@ def run_data_analysis(n_iterations: int) -> bool:
     env = _make_override_env({"n_iterations": n_iterations, "fresh_start": False, "summarize_on_start": False})
     return _run_subprocess(
         f"Data Analysis ({n_iterations} iters)",
-        [sys.executable, "loop.py"],
+        [sys.executable, "Analysts.py"],
         env, n_iterations * 300,
     )
 

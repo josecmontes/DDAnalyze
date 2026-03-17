@@ -1,9 +1,10 @@
 # ─── Global Analysis Settings ────────────────────────────────────────────────
 model: claude-sonnet-4-6
-active_context_file: active_context.md
-archive_file: full_archive.txt
+active_context_file: docs/active_context.md
+archive_file: docs/full_archive.txt
 data_file: workspace/data.xlsx
 task_file: docs/task.md
+extracted_code_file: docs/extracted_code.md
 
 graphs_folder: workspace/graphs    # analyst saves PNG charts here
 workspace_script: workspace/current_analysis.py
@@ -24,7 +25,7 @@ hybrid_threshold: 12
 # ─── Web Research Module ──────────────────────────────────────────────────────
 web_research_model: claude-sonnet-4-6
 web_research_context_file: docs/web_research_context.md
-web_research_archive_file: archives/web_research_archive.txt
+web_research_archive_file: docs/web_research_archive.txt
 web_research_iterations: 10
 web_research_interval_minutes: 0
 web_research_max_tokens: 6000            # Synthesizer token budget
@@ -39,8 +40,8 @@ deloitte_report_planner_max_tokens: 25000   # Stage 1: blueprint JSON
 deloitte_report_section_max_tokens: 25000  # Stage 2: per-section HTML + chart data
 deloitte_report_summary_max_tokens: 10000   # Stage 2: executive summary
 deloitte_report_glossary_max_tokens: 8000  # Stage 2: glossary
-deloitte_report_final_report: final_report.md
-deloitte_report_output: deloitte_report.html
+deloitte_report_final_report: docs/final_report.md
+deloitte_report_output: docs/deloitte_report.html
 
 # ─── Phase 2 / Architect Settings ────────────────────────────────────────────
 phase2_architect_max_tokens: 4000

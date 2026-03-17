@@ -3,7 +3,7 @@
 DDAnalyze Orchestrator
 Master controller that coordinates the full due diligence pipeline:
 
-  1. Scheduled phases of data analysis (loop.py) and web research (web_research.py)
+  1. Scheduled phases of data analysis (Analysts.py) and web research (web_research.py)
   2. Final markdown report generation (phase2.py)
   3. Deloitte premium HTML report (deloitte_report.py)
 
@@ -51,7 +51,7 @@ def run_data_analysis(n_iterations: int) -> bool:
 
     try:
         result = subprocess.run(
-            [sys.executable, "loop.py"],
+            [sys.executable, "Analysts.py"],
             timeout=n_iterations * 300,
             env=env,
         )

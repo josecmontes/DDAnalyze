@@ -10,7 +10,7 @@ Pipeline:
   Stage 2 (Sections):  For each planned section, generate HTML content + chart specs
   Stage 3 (Assembler): Stitch sections into a single self-contained HTML file
 
-Run after loop.py and phase2.py have completed, or standalone with existing data.
+Run after Analysts.py and phase2.py have completed, or standalone with existing data.
 """
 
 import json
@@ -1632,7 +1632,7 @@ def main() -> None:
 
     # Validate inputs
     if not Path(archive_path).exists():
-        logger.error(f"ERROR: {archive_path} not found. Run loop.py first.")
+        logger.error(f"ERROR: {archive_path} not found. Run Analysts.py first.")
         sys.exit(1)
 
     archive_text = read_file(archive_path)
