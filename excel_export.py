@@ -138,6 +138,199 @@ def _style_data_sheet(ws, n_rows: int, n_cols: int) -> None:
     _auto_width(ws, max_width=30, min_width=8)
 
 
+# ─── Per-Iteration Auto XLSX (formula-based) ─────────────────────────────────
+
+
+def generate_iteration_xlsx(
+    iteration: int, parsed: dict, stdout: str, data_file: str,
+    output_dir: str = "workspace/exports",
+) -> str:
+    """
+    Auto-generate a per-iteration xlsx with:
+      - Data sheet (raw data from data.xlsx)
+      - Output sheet (text output of the iteration)
+      - Analysis sheet (SUMIF/COUNTIF/AVERAGEIF formulas based on columns_used)
+    No LLM call needed — fast and deterministic.
+    """
+    from openpyxl import Workbook
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    analysis_type = parsed.get("analysis_type", "unknown")
+    safe_type = re.sub(r"[^\w\s-]", "", analysis_type).strip().replace(" ", "_")[:30]
+    output_path = os.path.join(output_dir, f"iter{iteration:03d}_{safe_type}.xlsx")
+
+    try:
+        df = pd.read_excel(data_file)
+    except Exception as e:
+        logger.warning(f"[AutoXLSX] Cannot read data file {data_file}: {e}")
+        return ""
+
+    n = len(df)
+    col_map = {col: get_column_letter(i + 1) for i, col in enumerate(df.columns)}
+
+    wb = Workbook()
+
+    # ── Sheet 1: Data ──
+    ws_data = wb.active
+    ws_data.title = "Data"
+    for col_idx, col_name in enumerate(df.columns, 1):
+        ws_data.cell(row=1, column=col_idx, value=col_name)
+    for row_idx, row in enumerate(df.itertuples(index=False), 2):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws_data.cell(row=row_idx, column=col_idx)
+            if pd.isna(value):
+                cell.value = None
+            else:
+                cell.value = value
+    _style_data_sheet(ws_data, n, len(df.columns))
+
+    # ── Sheet 2: Output ──
+    ws_output = wb.create_sheet("Output")
+    ws_output.cell(row=1, column=1, value=f"Iteration {iteration}: {analysis_type}").font = TITLE_FONT
+    ws_output.cell(row=2, column=1, value=f"Hypothesis: {parsed.get('hypothesis', '')}").font = BODY_FONT
+    ws_output.cell(row=3, column=1, value=f"Columns: {', '.join(parsed.get('columns_used', []))}").font = BODY_FONT
+    ws_output.cell(row=4, column=1).value = ""
+    for i, line in enumerate(stdout.split("\n")[:500], 5):
+        ws_output.cell(row=i, column=1, value=line).font = BODY_FONT
+    ws_output.column_dimensions["A"].width = 120
+
+    # ── Sheet 3+: Formula-based analysis sheets ──
+    columns_used = parsed.get("columns_used", [])
+    # Match columns to actual data columns (case-insensitive fuzzy match)
+    actual_cols = list(df.columns)
+    col_lower_map = {c.lower(): c for c in actual_cols}
+
+    matched_cols = []
+    for c in columns_used:
+        if c in actual_cols:
+            matched_cols.append(c)
+        elif c.lower() in col_lower_map:
+            matched_cols.append(col_lower_map[c.lower()])
+
+    numeric_cols = [c for c in matched_cols if c in df.columns and df[c].dtype.kind in ('f', 'i')]
+    categorical_cols = [c for c in matched_cols if c in df.columns and df[c].dtype.kind in ('O', 'S', 'U')]
+
+    # Also scan all data columns if matched set is too narrow
+    if not numeric_cols:
+        numeric_cols = [c for c in actual_cols if df[c].dtype.kind in ('f', 'i')][:3]
+    if not categorical_cols:
+        categorical_cols = [c for c in actual_cols if df[c].dtype.kind in ('O', 'S', 'U')][:2]
+
+    if numeric_cols and categorical_cols:
+        _build_formula_sheets(wb, df, col_map, n, numeric_cols[:3], categorical_cols[:2])
+
+    try:
+        wb.save(output_path)
+        wb.close()
+        size_kb = Path(output_path).stat().st_size / 1024
+        logger.info(f"[AutoXLSX] Created {output_path} ({size_kb:.1f} KB)")
+        return output_path
+    except Exception as e:
+        logger.warning(f"[AutoXLSX] Failed to save {output_path}: {e}")
+        return ""
+
+
+def _build_formula_sheets(
+    wb, df: pd.DataFrame, col_map: dict, n: int,
+    numeric_cols: list, categorical_cols: list,
+) -> None:
+    """Build formula-based analysis sheets using SUMIF/COUNTIF/AVERAGEIF."""
+    for cat_col in categorical_cols:
+        cat_letter = col_map.get(cat_col)
+        if not cat_letter:
+            continue
+
+        unique_vals = df[cat_col].dropna().unique()
+        if len(unique_vals) > 100:
+            unique_vals = unique_vals[:100]
+        if len(unique_vals) == 0:
+            continue
+
+        sheet_name = f"By {cat_col}"[:31]
+        ws = wb.create_sheet(sheet_name)
+
+        # Title
+        ws.cell(row=1, column=1, value=f"Analysis by {cat_col}").font = TITLE_FONT
+
+        # Headers
+        row = 3
+        ws.cell(row=row, column=1, value=cat_col)
+        ws.cell(row=row, column=2, value="Count")
+        col_offset = 3
+        for nc in numeric_cols:
+            ws.cell(row=row, column=col_offset, value=f"Sum of {nc}")
+            ws.cell(row=row, column=col_offset + 1, value=f"Avg of {nc}")
+            col_offset += 2
+        _style_header_row(ws, row, col_offset - 1)
+        row += 1
+
+        data_range_cat = f"Data!${cat_letter}$2:${cat_letter}${n + 1}"
+        start_data_row = row
+
+        # Data rows with formulas
+        for val in unique_vals:
+            ws.cell(row=row, column=1, value=str(val)).font = BODY_FONT
+            ws.cell(row=row, column=1).border = THIN_BORDER
+            # COUNTIF
+            ws.cell(row=row, column=2).value = f'=COUNTIF({data_range_cat},A{row})'
+            ws.cell(row=row, column=2).font = BODY_FONT
+            ws.cell(row=row, column=2).border = THIN_BORDER
+
+            col_offset = 3
+            for nc in numeric_cols:
+                nc_letter = col_map.get(nc)
+                if nc_letter:
+                    data_range_num = f"Data!${nc_letter}$2:${nc_letter}${n + 1}"
+                    # SUMIF
+                    ws.cell(row=row, column=col_offset).value = (
+                        f'=SUMIF({data_range_cat},A{row},{data_range_num})'
+                    )
+                    ws.cell(row=row, column=col_offset).font = BODY_FONT
+                    ws.cell(row=row, column=col_offset).border = THIN_BORDER
+                    ws.cell(row=row, column=col_offset).number_format = '#,##0.00'
+                    # AVERAGEIF
+                    ws.cell(row=row, column=col_offset + 1).value = (
+                        f'=AVERAGEIF({data_range_cat},A{row},{data_range_num})'
+                    )
+                    ws.cell(row=row, column=col_offset + 1).font = BODY_FONT
+                    ws.cell(row=row, column=col_offset + 1).border = THIN_BORDER
+                    ws.cell(row=row, column=col_offset + 1).number_format = '#,##0.00'
+                col_offset += 2
+
+            # Zebra striping
+            if (row - start_data_row) % 2 == 1:
+                for c in range(1, col_offset):
+                    ws.cell(row=row, column=c).fill = ZEBRA_FILL
+            row += 1
+
+        # Total row
+        end_data_row = row - 1
+        ws.cell(row=row, column=1, value="TOTAL").font = Font(
+            name="Arial", bold=True, size=10, color=DARK_GREEN,
+        )
+        ws.cell(row=row, column=1).border = THIN_BORDER
+        total_col_letter = get_column_letter(2)
+        ws.cell(row=row, column=2).value = (
+            f'=SUM({total_col_letter}{start_data_row}:{total_col_letter}{end_data_row})'
+        )
+        ws.cell(row=row, column=2).font = Font(name="Arial", bold=True, size=10)
+        ws.cell(row=row, column=2).border = THIN_BORDER
+
+        col_offset = 3
+        for nc in numeric_cols:
+            sum_letter = get_column_letter(col_offset)
+            ws.cell(row=row, column=col_offset).value = (
+                f'=SUM({sum_letter}{start_data_row}:{sum_letter}{end_data_row})'
+            )
+            ws.cell(row=row, column=col_offset).font = Font(name="Arial", bold=True, size=10)
+            ws.cell(row=row, column=col_offset).border = THIN_BORDER
+            ws.cell(row=row, column=col_offset).number_format = '#,##0.00'
+            col_offset += 2
+
+        _auto_width(ws)
+
+
 # ─── Export-All: Quick Structured Dump ────────────────────────────────────────
 
 def export_iterations_to_excel(

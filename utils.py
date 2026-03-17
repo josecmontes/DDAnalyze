@@ -219,6 +219,7 @@ def parse_archive_all(archive_text: str) -> list:
         for field, pattern in [
             ("iteration", r"ITERATION:\s*(\d+)"),
             ("date", r"DATE:\s*(.+)"),
+            ("source", r"SOURCE:\s*(.+)"),
             ("analysis_type", r"ANALYSIS TYPE:\s*(.+)"),
             ("hypothesis", r"HYPOTHESIS:\s*(.+)"),
             ("columns_used", r"COLUMNS USED:\s*(.+)"),

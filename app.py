@@ -171,6 +171,22 @@ def run_deloitte_report() -> bool:
     return _run_subprocess("Deloitte Report", [sys.executable, "deloitte_report.py"], os.environ.copy(), 900)
 
 
+def _run_adhoc_analysis(n_iterations: int, description: str) -> bool:
+    """Run ad-hoc data analysis with specific guidance injected.
+    Uses analysis_source=adhoc so iterations are clearly labeled in the archive."""
+    env = _make_override_env({
+        "n_iterations": n_iterations,
+        "fresh_start": False,
+        "summarize_on_start": False,
+        "analysis_source": "adhoc",
+    })
+    return _run_subprocess(
+        f"Ad-hoc Analysis: {description[:60]}",
+        [sys.executable, "Analysts.py"],
+        env, n_iterations * 300,
+    )
+
+
 # ─── Pipeline Execution ──────────────────────────────────────────────────────
 
 def _run_pipeline(schedule: list[tuple[str, int]]) -> None:
@@ -307,25 +323,54 @@ def handle_chat_message(message: str, history: list) -> dict:
 
     # Direct commands
     if msg_lower.startswith("/analyze"):
-        parts = message.split()
-        n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
+        parts = message.split(maxsplit=2)
+        n = 5
+        description = ""
+        if len(parts) > 1 and parts[1].isdigit():
+            n = int(parts[1])
+            if len(parts) > 2:
+                description = parts[2]
+        elif len(parts) > 1:
+            # No number given, treat rest as description, default 1 iteration
+            n = 1
+            description = " ".join(parts[1:])
+
+        if description:
+            return {
+                "text": f"Running {n} focused analysis iteration(s): **{description}**",
+                "action": {"type": "run_adhoc", "description": description, "iterations": n},
+            }
         return {
             "text": f"Starting {n} additional data analysis iterations...",
             "action": {"type": "run_analysis", "iterations": n},
         }
 
     if msg_lower.startswith("/research"):
-        parts = message.split()
-        n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
+        parts = message.split(maxsplit=2)
+        n = 3
+        description = ""
+        if len(parts) > 1 and parts[1].isdigit():
+            n = int(parts[1])
+            if len(parts) > 2:
+                description = parts[2]
+        elif len(parts) > 1:
+            n = 1
+            description = " ".join(parts[1:])
+
+        if description:
+            return {
+                "text": f"Running {n} focused web research iteration(s): **{description}**",
+                "action": {"type": "run_adhoc_research", "description": description, "iterations": n},
+            }
         return {
             "text": f"Starting {n} web research iterations...",
             "action": {"type": "run_research", "iterations": n},
         }
 
-    if msg_lower == "/report":
+    if msg_lower == "/report" or msg_lower == "/refresh-report":
         return {
-            "text": "Regenerating the report...",
-            "action": {"type": "run_report"},
+            "text": "Refreshing reports (Markdown + Deloitte HTML)...",
+            "action": {"type": "refresh_reports"},
         }
 
     if msg_lower == "/deloitte":
@@ -479,15 +524,17 @@ def _get_status() -> dict:
         success = sum(1 for e in entries if e.get("status", "").lower() == "success")
         failed = sum(1 for e in entries if e.get("status", "").lower() != "success")
         total = get_current_iteration(archive_path)
+        adhoc_count = sum(1 for e in entries if e.get("source", "").lower() == "adhoc")
         types = sorted(set(
             e.get("analysis_type", "unknown")
             for e in entries if e.get("status", "").lower() == "success"
         ))
         status["data_analysis"] = {
-            "total": total, "success": success, "failed": failed, "types": types
+            "total": total, "success": success, "failed": failed,
+            "adhoc": adhoc_count, "types": types,
         }
     else:
-        status["data_analysis"] = {"total": 0, "success": 0, "failed": 0, "types": []}
+        status["data_analysis"] = {"total": 0, "success": 0, "failed": 0, "adhoc": 0, "types": []}
 
     web_archive_path = _config.get("web_research_archive_file", "web_research_archive.txt")
     status["web_research"] = {"total": get_current_iteration(web_archive_path)}
@@ -622,6 +669,39 @@ def api_run_phase():
     return jsonify({"ok": True})
 
 
+@app.route("/api/adhoc", methods=["POST"])
+def api_adhoc():
+    """Run an ad-hoc analysis or research with specific user guidance."""
+    with _pipeline_lock:
+        if _pipeline_state["running"]:
+            return jsonify({"error": "Pipeline is already running"}), 409
+
+    data = request.json or {}
+    description = data.get("description", "").strip()
+    mode = data.get("mode", "analysis")  # "analysis" or "research"
+    n = data.get("iterations", 1)
+
+    if not description:
+        return jsonify({"error": "No description provided"}), 400
+
+    if mode == "research":
+        def _do():
+            web_ctx = _config.get("web_research_context_file", "web_research_context.md")
+            _inject_guidance(web_ctx, "## Open Questions / Suggested Next Research", description)
+            run_web_research(n)
+        thread = threading.Thread(target=_do, daemon=True)
+        thread.start()
+    else:
+        def _do():
+            data_ctx = _config.get("active_context_file", "active_context.md")
+            _inject_guidance(data_ctx, "## Open Questions / Suggested Next Steps", description)
+            _run_adhoc_analysis(n, description)
+        thread = threading.Thread(target=_do, daemon=True)
+        thread.start()
+
+    return jsonify({"ok": True, "mode": mode, "description": description, "iterations": n})
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """Handle a chat message."""
@@ -650,8 +730,38 @@ def api_chat():
                     schedule = [("web_research", action.get("iterations", 3))]
                     thread = threading.Thread(target=_run_pipeline, args=(schedule,), daemon=True)
                     thread.start()
+                elif action_type == "run_adhoc":
+                    desc = action.get("description", "")
+                    n = action.get("iterations", 1)
+                    def _do_adhoc(desc=desc, n=n):
+                        data_ctx_path = _config.get("active_context_file", "active_context.md")
+                        _inject_guidance(
+                            data_ctx_path,
+                            "## Open Questions / Suggested Next Steps",
+                            desc,
+                        )
+                        _run_adhoc_analysis(n, desc)
+                    thread = threading.Thread(target=_do_adhoc, daemon=True)
+                    thread.start()
+                elif action_type == "run_adhoc_research":
+                    desc = action.get("description", "")
+                    n = action.get("iterations", 1)
+                    def _do_adhoc_research(desc=desc, n=n):
+                        web_ctx_path = _config.get("web_research_context_file", "web_research_context.md")
+                        _inject_guidance(
+                            web_ctx_path,
+                            "## Open Questions / Suggested Next Research",
+                            desc,
+                        )
+                        run_web_research(n)
+                    thread = threading.Thread(target=_do_adhoc_research, daemon=True)
+                    thread.start()
                 elif action_type == "run_report":
                     thread = threading.Thread(target=_run_pipeline, args=([("report", 0)],), daemon=True)
+                    thread.start()
+                elif action_type == "refresh_reports":
+                    schedule = [("report", 0), ("deloitte_report", 0)]
+                    thread = threading.Thread(target=_run_pipeline, args=(schedule,), daemon=True)
                     thread.start()
                 elif action_type == "run_deloitte":
                     thread = threading.Thread(target=_run_pipeline, args=([("deloitte_report", 0)],), daemon=True)
