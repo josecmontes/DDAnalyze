@@ -5,65 +5,25 @@ Autonomous web research loop that complements the data analysis loop.
 
 Runs N sequential iterations of:
   Researcher (plan search) → Web Search (execute) → Synthesizer (evaluate) → Archive → Update context
-
-Reads active_context.md (data analysis findings) to ground research in what the data shows,
-then searches the web for market context, competitive intelligence, industry trends, and
-business understanding that enriches the data analysis.
-
-The web research knowledge base (web_research_context.md) is separate from, but
-cross-references, the data analysis knowledge base (active_context.md).
 """
 
 import json
 import logging
 import os
 import re
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import anthropic
-import yaml
-
-from dotenv import load_dotenv
-
-load_dotenv()
-API_KEY = os.getenv('API_KEY')
-
-# Change to the directory containing this script so relative paths work
 os.chdir(Path(__file__).parent)
 
-# ─── Logging Setup ────────────────────────────────────────────────────────────
+from utils import (
+    read_file, write_file, append_file, load_config, setup_logging,
+    call_llm_with_tokens, parse_json_response, create_client,
+)
 
 logger = logging.getLogger("ddanalyze.web_research")
-
-
-def setup_logging(debug: bool = False, log_dir: str = "logs") -> Path:
-    Path(log_dir).mkdir(exist_ok=True)
-    log_file = Path(log_dir) / f"web_research_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
-    console_level = logging.DEBUG if debug else logging.INFO
-
-    root = logging.getLogger("ddanalyze")
-    root.setLevel(logging.DEBUG)
-
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(console_level)
-    ch.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-    root.addHandler(ch)
-
-    fh = logging.FileHandler(log_file, encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)-7s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    root.addHandler(fh)
-
-    return log_file
-
 
 # ─── System Prompts ───────────────────────────────────────────────────────────
 
@@ -174,78 +134,17 @@ WEB_RESEARCH_CONTEXT_TEMPLATE = """# Web Research Knowledge Base
 - [None yet]
 """
 
-# ─── File Utilities ───────────────────────────────────────────────────────────
-
-def read_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-def write_file(path: str, content: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def append_file(path: str, content: str) -> None:
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(content)
-
-
-# ─── LLM Utilities ───────────────────────────────────────────────────────────
-
-def call_llm(
-    client: anthropic.Anthropic,
-    system: str,
-    user: str,
-    model: str,
-    max_tokens: int,
-    tag: str = "LLM",
-) -> tuple[str, int, int]:
-    """Call Claude and return (text, input_tokens, output_tokens)."""
-    logger.debug(
-        f"[{tag}] Sending request | system={len(system):,}ch "
-        f"user={len(user):,}ch max_tokens={max_tokens}"
-    )
-    t0 = time.time()
-
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    ) as stream:
-        response = stream.get_final_message()
-
-    elapsed = time.time() - t0
-    in_tok = response.usage.input_tokens
-    out_tok = response.usage.output_tokens
-
-    logger.info(
-        f"  [{tag}] Done in {elapsed:.1f}s | tokens in={in_tok:,} out={out_tok:,}"
-    )
-
-    for block in response.content:
-        if block.type == "text":
-            return block.text, in_tok, out_tok
-    return "", in_tok, out_tok
+# ─── Web Search LLM Call ──────────────────────────────────────────────────────
 
 
 def call_llm_with_web_search(
-    client: anthropic.Anthropic,
-    system: str,
-    user: str,
-    model: str,
-    max_tokens: int,
-    tag: str = "WebSearch",
+    client, system: str, user: str, model: str, max_tokens: int, tag: str = "WebSearch",
 ) -> tuple[str, list[dict], int, int]:
     """
     Call Claude with the web search tool enabled.
     Returns (text, search_results, input_tokens, output_tokens).
-
-    Uses a multi-turn loop: if Claude issues web_search tool calls, we feed
-    the results back until it produces a final text response.
     """
+    import anthropic
     logger.debug(
         f"[{tag}] Sending request with web search | system={len(system):,}ch "
         f"user={len(user):,}ch max_tokens={max_tokens}"
@@ -257,27 +156,20 @@ def call_llm_with_web_search(
 
     messages = [{"role": "user", "content": user}]
 
-    # Multi-turn loop to handle tool use
-    for turn in range(10):  # safety cap
+    for turn in range(10):
         response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
+            model=model, max_tokens=max_tokens, system=system,
             messages=messages,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
         )
-
         total_in_tok += response.usage.input_tokens
         total_out_tok += response.usage.output_tokens
 
-        # Collect text and tool-use blocks from response
         text_parts = []
-        tool_use_blocks = []
         for block in response.content:
             if block.type == "text":
                 text_parts.append(block.text)
             elif block.type == "web_search_tool_result":
-                # Extract search results for logging
                 for content_block in getattr(block, "content", []):
                     if hasattr(content_block, "type") and content_block.type == "web_search_result":
                         all_search_results.append({
@@ -286,7 +178,6 @@ def call_llm_with_web_search(
                             "snippet": getattr(content_block, "encrypted_content", "")[:200],
                         })
 
-        # If stop_reason is end_turn or no more tool calls, we're done
         if response.stop_reason == "end_turn" or response.stop_reason != "tool_use":
             final_text = "\n".join(text_parts)
             elapsed = time.time() - t0
@@ -297,70 +188,26 @@ def call_llm_with_web_search(
             )
             return final_text, all_search_results, total_in_tok, total_out_tok
 
-        # Otherwise, append the assistant response and continue
         messages.append({"role": "assistant", "content": response.content})
-        # For tool_use blocks, we need to provide tool results
-        # With server-side web search, the results come back inline,
-        # so we just need to continue the conversation
         messages.append({
             "role": "user",
             "content": "Continue with your analysis based on the search results above."
         })
 
-    # Fallback: max turns reached
     elapsed = time.time() - t0
     final_text = "\n".join(text_parts) if text_parts else ""
     logger.warning(f"[{tag}] Max turns reached in {elapsed:.1f}s")
     return final_text, all_search_results, total_in_tok, total_out_tok
 
 
-def parse_json_response(text: str, tag: str = "JSON") -> Optional[dict]:
-    """Robustly extract a JSON object from an LLM response."""
-    text = text.strip()
-
-    # Attempt 1: direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.debug(f"[{tag}] Direct JSON parse failed — trying markdown fence extraction")
-
-    # Attempt 2: extract from markdown code fence
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.DOTALL)
-    if match:
-        try:
-            result = json.loads(match.group(1).strip())
-            logger.debug(f"[{tag}] JSON extracted from markdown fence (attempt 2)")
-            return result
-        except json.JSONDecodeError:
-            logger.debug(f"[{tag}] Markdown fence extraction failed — trying brace search")
-
-    # Attempt 3: find outermost { ... }
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            result = json.loads(text[start : end + 1])
-            logger.debug(f"[{tag}] JSON extracted via brace search (attempt 3)")
-            return result
-        except json.JSONDecodeError:
-            pass
-
-    preview = text[:300].replace("\n", " ")
-    logger.warning(f"[{tag}] All JSON parse attempts failed. Response preview: {preview!r}")
-    return None
-
-
 # ─── Message Builders ─────────────────────────────────────────────────────────
 
+
 def build_researcher_user_message(
-    task_content: str,
-    data_context: str,
-    web_context: str,
-    iteration: int,
-    config: dict,
+    task_content: str, data_context: str, web_context: str,
+    iteration: int, config: dict,
 ) -> str:
     n = config.get("web_research_iterations", 10)
-
     return f"""## Task Description (Business Context)
 
 {task_content}
@@ -380,15 +227,11 @@ def build_researcher_user_message(
 - Prioritise research that connects to specific data analysis findings."""
 
 
-def build_search_user_message(
-    parsed: dict, task_content: str, data_context: str
-) -> str:
-    """Build the message for the web search call."""
+def build_search_user_message(parsed: dict, task_content: str, data_context: str) -> str:
     queries = parsed.get("search_queries", [])
     topic = parsed.get("research_topic", "")
     hypothesis = parsed.get("hypothesis", "")
     connection = parsed.get("connection_to_data", "")
-
     queries_str = "\n".join(f"  {i+1}. {q}" for i, q in enumerate(queries))
 
     return f"""You are conducting web research for a financial due diligence analysis.
@@ -452,6 +295,7 @@ Evaluate this web research and return a JSON object with the specified fields.""
 
 # ─── Active Context Utilities ─────────────────────────────────────────────────
 
+
 def _insert_after_header(content: str, header: str, new_text: str) -> str:
     lines = content.split("\n")
     for i, line in enumerate(lines):
@@ -462,11 +306,9 @@ def _insert_after_header(content: str, header: str, new_text: str) -> str:
 
 
 def _append_to_table(content: str, section_header: str, new_row: str) -> str:
-    """Append a new row at the end of a markdown table under the given section header."""
     lines = content.split("\n")
     last_table_line = -1
     in_section = False
-
     for i, line in enumerate(lines):
         if section_header in line:
             in_section = True
@@ -476,7 +318,6 @@ def _append_to_table(content: str, section_header: str, new_row: str) -> str:
                 break
             if "|" in line:
                 last_table_line = i
-
     if last_table_line == -1:
         for i, line in enumerate(lines):
             if section_header in line:
@@ -484,117 +325,81 @@ def _append_to_table(content: str, section_header: str, new_row: str) -> str:
                 lines.insert(insert_at, new_row)
                 return "\n".join(lines)
         return content
-
     lines.insert(last_table_line + 1, new_row)
     return "\n".join(lines)
 
 
 def update_web_context_success(
-    path: str,
-    iteration: int,
-    parsed: dict,
-    evaluation: dict,
+    path: str, iteration: int, parsed: dict, evaluation: dict,
 ) -> None:
     content = read_file(path)
-    size_before = len(content)
     now = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Add row to Research Index
     topic = parsed.get("research_topic", "unknown")
     queries = "; ".join(parsed.get("search_queries", []))[:80]
     new_row = f"| {iteration} | {topic} | {queries} | SUCCESS | {now} |"
     content = _append_to_table(content, "## Research Index", new_row)
 
-    # 2. Add key findings to Key Intelligence
     findings = evaluation.get("key_findings", [])
     if findings:
         facts_text = "\n".join(f"- [Iter {iteration}] {f}" for f in findings)
         content = _insert_after_header(content, "## Key Intelligence", facts_text)
 
-    # 3. Add full summary to What Has Been Researched
     summary_full = evaluation.get("summary", "")
     tried = f"- [Iter {iteration}] {topic}: {summary_full}"
     content = _insert_after_header(content, "## What Has Been Researched", tried)
 
-    # 4. Add data connections
     data_connections = evaluation.get("data_connections", [])
     if data_connections:
-        connections_text = "\n".join(
-            f"- [Iter {iteration}] {dc}" for dc in data_connections
-        )
-        content = _insert_after_header(
-            content, "## Cross-References to Data Analysis", connections_text
-        )
+        connections_text = "\n".join(f"- [Iter {iteration}] {dc}" for dc in data_connections)
+        content = _insert_after_header(content, "## Cross-References to Data Analysis", connections_text)
 
-    # 5. Add suggested followup
     followup = evaluation.get("suggested_followup", "")
     if followup:
         content = _insert_after_header(
-            content,
-            "## Open Questions / Suggested Next Research",
+            content, "## Open Questions / Suggested Next Research",
             f"- [From Iter {iteration}] {followup}",
         )
 
-    # 6. Add dead ends
     dead_ends = evaluation.get("dead_ends", [])
     for de in dead_ends:
         content = _insert_after_header(
-            content,
-            "## Dead Ends & Closed Paths",
-            f"- [From Iter {iteration}] {de}",
+            content, "## Dead Ends & Closed Paths", f"- [From Iter {iteration}] {de}",
         )
 
     write_file(path, content)
-    size_after = len(content)
-    logger.debug(
-        f"[Context] Updated (success): {size_before:,}ch → {size_after:,}ch "
-        f"(+{size_after - size_before:,}ch)"
-    )
 
 
 def update_web_context_failure(
     path: str, iteration: int, parsed: dict, evaluation: dict
 ) -> None:
     content = read_file(path)
-    size_before = len(content)
     now = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Add FAILED row to Research Index
     topic = parsed.get("research_topic", "unknown")
     queries = "; ".join(parsed.get("search_queries", []))[:80]
     new_row = f"| {iteration} | {topic} | {queries} | FAILED | {now} |"
     content = _append_to_table(content, "## Research Index", new_row)
 
-    # 2. Add failure note
     suggested = evaluation.get("suggested_followup", "")
     tried = f"- [Iter {iteration}] FAILED — {topic}. {suggested}"
     content = _insert_after_header(content, "## What Has Been Researched", tried)
 
-    # 3. Add dead ends
     dead_ends = evaluation.get("dead_ends", [])
     for de in dead_ends:
         content = _insert_after_header(
-            content,
-            "## Dead Ends & Closed Paths",
-            f"- [From Iter {iteration}] {de}",
+            content, "## Dead Ends & Closed Paths", f"- [From Iter {iteration}] {de}",
         )
 
     write_file(path, content)
-    size_after = len(content)
-    logger.debug(
-        f"[Context] Updated (failure): {size_before:,}ch → {size_after:,}ch "
-        f"(+{size_after - size_before:,}ch)"
-    )
 
 
 # ─── Archive Utilities ────────────────────────────────────────────────────────
 
+
 def _format_archive_entry(
-    iteration: int,
-    parsed: Optional[dict],
-    search_response: str,
-    search_results: list,
-    evaluation: Optional[dict],
+    iteration: int, parsed: Optional[dict], search_response: str,
+    search_results: list, evaluation: Optional[dict],
     error_label: Optional[str] = None,
 ) -> str:
     sep_major = "=" * 80
@@ -603,40 +408,27 @@ def _format_archive_entry(
 
     if error_label:
         return "\n".join([
-            sep_major,
-            f"ITERATION: {iteration}",
-            f"DATE: {now}",
-            f"STATUS: {error_label}",
-            sep_minor,
-            "RAW RESPONSE / ERROR:",
-            search_response or "(none)",
-            sep_major,
-            "",
+            sep_major, f"ITERATION: {iteration}", f"DATE: {now}",
+            f"STATUS: {error_label}", sep_minor,
+            "RAW RESPONSE / ERROR:", search_response or "(none)",
+            sep_major, "",
         ])
 
     status = evaluation.get("status", "unknown") if evaluation else "unknown"
-
     lines = [
-        sep_major,
-        f"ITERATION: {iteration}",
-        f"DATE: {now}",
+        sep_major, f"ITERATION: {iteration}", f"DATE: {now}",
         f"STATUS: {status}",
         f"RESEARCH TOPIC: {parsed.get('research_topic', 'unknown')}",
         f"HYPOTHESIS: {parsed.get('hypothesis', '')}",
         f"SEARCH QUERIES: {json.dumps(parsed.get('search_queries', []))}",
         f"CONNECTION TO DATA: {parsed.get('connection_to_data', '')}",
-        sep_minor,
-        "WEB SEARCH RESULTS:",
-        search_response or "(no results)",
+        sep_minor, "WEB SEARCH RESULTS:", search_response or "(no results)",
     ]
-
     if search_results:
         lines += ["", "SOURCES:"]
         for sr in search_results[:20]:
             lines.append(f"  - {sr.get('title', 'Unknown')}: {sr.get('url', '')}")
-
     lines += ["", sep_minor, "EVALUATION:"]
-
     if evaluation:
         if status == "success":
             lines.append(f"Quality: {evaluation.get('quality', 'unknown')}")
@@ -656,12 +448,12 @@ def _format_archive_entry(
         else:
             lines.append(f"Summary: {evaluation.get('summary', '')}")
             lines.append(f"Suggested followup: {evaluation.get('suggested_followup', '')}")
-
     lines += [sep_major, ""]
     return "\n".join(lines)
 
 
 # ─── Initialisation Helpers ───────────────────────────────────────────────────
+
 
 def _extract_goal_from_task(task_content: str) -> str:
     lines = []
@@ -684,15 +476,9 @@ def _init_web_context(path: str, task_content: str) -> None:
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
-    # ── Load config ──────────────────────────────────────────────────────────
-    config = yaml.safe_load(read_file("config.yaml"))
-
-    # Apply orchestrator overrides passed via env var (keeps config.yaml untouched)
-    _env_overrides = os.environ.get("DDANALYZE_CONFIG_OVERRIDES")
-    if _env_overrides:
-        config.update(json.loads(_env_overrides))
-
+    config = load_config()
     model = config.get("web_research_model", config["model"])
     max_tokens = config.get("web_research_max_tokens", config["max_tokens"])
     researcher_max_tokens = config.get("web_research_researcher_max_tokens", 8000)
@@ -706,13 +492,11 @@ def main() -> None:
     debug_logging = config.get("debug_logging", False)
     fresh_start = config.get("web_research_fresh_start", False)
 
-    # ── Setup logging ─────────────────────────────────────────────────────────
-    log_file = setup_logging(debug=debug_logging)
+    log_file = setup_logging("web_research", debug=debug_logging)
 
     task_content = read_file(task_path)
-    client = anthropic.Anthropic(api_key=API_KEY)
+    client = create_client()
 
-    # ── fresh_start ──────────────────────────────────────────────────────────
     if fresh_start:
         logger.info("[fresh_start] Resetting web research context and archive")
         _init_web_context(web_context_path, task_content)
@@ -724,7 +508,6 @@ def main() -> None:
     if not Path(web_archive_path).exists():
         write_file(web_archive_path, "")
 
-    # ── Banner ───────────────────────────────────────────────────────────────
     logger.info(f"\n{'=' * 60}")
     logger.info("AUTONOMOUS WEB RESEARCH LOOP")
     logger.info(f"Model   : {model}")
@@ -737,33 +520,26 @@ def main() -> None:
     logger.info(f"Debug   : {'ON' if debug_logging else 'OFF'}")
     logger.info(f"{'=' * 60}")
 
-    # ── Token tracking ───────────────────────────────────────────────────────
     total_input_tokens = 0
     total_output_tokens = 0
 
-    # ── Iteration loop ────────────────────────────────────────────────────────
     for iteration in range(1, n_iterations + 1):
         iter_start = time.time()
         logger.info(f"\n=== WEB RESEARCH ITERATION {iteration} / {n_iterations} ===")
 
         try:
-            # ── Step 1: Read contexts ────────────────────────────────────────
             web_context = read_file(web_context_path)
-            logger.debug(f"[Context] Web research context: {len(web_context):,}ch")
-
             data_context = ""
             if Path(data_context_path).exists():
                 data_context = read_file(data_context_path)
-                logger.debug(f"[Context] Data analysis context: {len(data_context):,}ch")
             else:
                 logger.warning(f"[Context] Data analysis context not found: {data_context_path}")
 
-            # ── Step 2: Call Researcher ───────────────────────────────────────
             logger.info("  [Researcher] Planning web research...")
             researcher_msg = build_researcher_user_message(
                 task_content, data_context, web_context, iteration, config
             )
-            raw_researcher, in_tok, out_tok = call_llm(
+            raw_researcher, in_tok, out_tok = call_llm_with_tokens(
                 client, RESEARCHER_SYSTEM_PROMPT, researcher_msg, model,
                 researcher_max_tokens, tag="Researcher"
             )
@@ -771,12 +547,9 @@ def main() -> None:
             total_output_tokens += out_tok
 
             parsed = parse_json_response(raw_researcher, tag="Researcher")
-
             if parsed is None:
                 logger.error("  [ERROR] Researcher returned invalid JSON — skipping iteration")
-                entry = _format_archive_entry(
-                    iteration, None, raw_researcher, [], None, "JSON_PARSE_ERROR"
-                )
+                entry = _format_archive_entry(iteration, None, raw_researcher, [], None, "JSON_PARSE_ERROR")
                 append_file(web_archive_path, entry)
                 continue
 
@@ -784,10 +557,7 @@ def main() -> None:
             search_queries = parsed.get("search_queries", [])
             logger.info(f"  [Researcher] Topic  : {research_topic}")
             logger.info(f"  [Researcher] Queries: {search_queries}")
-            logger.debug(f"  [Researcher] Hypothesis: {parsed.get('hypothesis', '')}")
-            logger.debug(f"  [Researcher] Connection: {parsed.get('connection_to_data', '')}")
 
-            # ── Step 3: Execute web search ────────────────────────────────────
             logger.info("  [Search] Executing web search...")
             search_msg = build_search_user_message(parsed, task_content, data_context)
             search_response, search_results, in_tok, out_tok = call_llm_with_web_search(
@@ -796,63 +566,41 @@ def main() -> None:
             total_input_tokens += in_tok
             total_output_tokens += out_tok
 
-            logger.info(
-                f"  [Search] Got {len(search_results)} sources, "
-                f"response: {len(search_response):,}ch"
-            )
-            logger.debug(f"  [Search] Response preview: {search_response[:500]}")
+            logger.info(f"  [Search] Got {len(search_results)} sources, response: {len(search_response):,}ch")
 
-            # ── Step 4: Call Synthesizer ──────────────────────────────────────
             logger.info("  [Synthesizer] Evaluating research...")
-            synth_msg = build_synthesizer_user_message(
-                parsed, search_response, search_results, iteration
-            )
-            raw_synth, in_tok, out_tok = call_llm(
-                client, SYNTHESIZER_SYSTEM_PROMPT, synth_msg, model, max_tokens,
-                tag="Synthesizer"
+            synth_msg = build_synthesizer_user_message(parsed, search_response, search_results, iteration)
+            raw_synth, in_tok, out_tok = call_llm_with_tokens(
+                client, SYNTHESIZER_SYSTEM_PROMPT, synth_msg, model, max_tokens, tag="Synthesizer"
             )
             total_input_tokens += in_tok
             total_output_tokens += out_tok
 
             evaluation = parse_json_response(raw_synth, tag="Synthesizer")
-
             if evaluation is None:
                 logger.error("  [ERROR] Synthesizer returned invalid JSON — logging and continuing")
                 entry = _format_archive_entry(
-                    iteration, parsed, search_response, search_results,
-                    None, "SYNTH_JSON_PARSE_ERROR"
+                    iteration, parsed, search_response, search_results, None, "SYNTH_JSON_PARSE_ERROR"
                 )
                 append_file(web_archive_path, entry)
                 continue
 
             status = evaluation.get("status", "unknown")
             quality = evaluation.get("quality", "") if status == "success" else ""
-            logger.info(
-                f"  [Synthesizer] Status: {status}"
-                + (f" | Quality: {quality}" if quality else "")
-            )
-            logger.debug(f"  [Synthesizer] Summary: {evaluation.get('summary', '')[:300]}")
+            logger.info(f"  [Synthesizer] Status: {status}" + (f" | Quality: {quality}" if quality else ""))
 
-            # ── Step 5: Write to archive ──────────────────────────────────────
-            entry = _format_archive_entry(
-                iteration, parsed, search_response, search_results, evaluation
-            )
+            entry = _format_archive_entry(iteration, parsed, search_response, search_results, evaluation)
             append_file(web_archive_path, entry)
-            logger.debug(f"  [Archive] Appended {len(entry):,}ch to {web_archive_path}")
 
-            # ── Step 6: Update web research context ───────────────────────────
             if status == "success":
                 update_web_context_success(web_context_path, iteration, parsed, evaluation)
                 n_findings = len(evaluation.get("key_findings", []))
                 n_connections = len(evaluation.get("data_connections", []))
-                logger.info(
-                    f"  [Context] Added {n_findings} finding(s), {n_connections} data connection(s)"
-                )
+                logger.info(f"  [Context] Added {n_findings} finding(s), {n_connections} data connection(s)")
             else:
                 update_web_context_failure(web_context_path, iteration, parsed, evaluation)
                 logger.info("  [Context] Logged failure")
 
-            # ── Step 7: Run Summarizer ────────────────────────────────────────
             if iteration % summarizer_every == 0 and iteration < n_iterations:
                 ctx_before = read_file(web_context_path)
                 logger.info("  [Summarizer] Compressing web research context...")
@@ -860,42 +608,34 @@ def main() -> None:
                     f"Current iteration: {iteration} of {n_iterations} total.\n\n"
                     + ctx_before
                 )
-                new_ctx, in_tok, out_tok = call_llm(
+                new_ctx, in_tok, out_tok = call_llm_with_tokens(
                     client, SUMMARIZER_SYSTEM_PROMPT, summarizer_msg, model,
                     max_tokens, tag="Summarizer",
                 )
                 total_input_tokens += in_tok
                 total_output_tokens += out_tok
-
                 write_file(web_context_path, new_ctx)
-                logger.info(
-                    f"  [Summarizer] Compressed: {len(ctx_before):,}ch → {len(new_ctx):,}ch"
-                )
+                logger.info(f"  [Summarizer] Compressed: {len(ctx_before):,}ch → {len(new_ctx):,}ch")
 
         except KeyboardInterrupt:
             logger.info("\n[Interrupted] Exiting loop cleanly.")
             break
         except Exception as exc:
             logger.error(f"  [FATAL ERROR] Iteration {iteration}: {exc}", exc_info=True)
-            error_entry = _format_archive_entry(
-                iteration, None, str(exc), [], None, "FATAL_ERROR"
-            )
+            error_entry = _format_archive_entry(iteration, None, str(exc), [], None, "FATAL_ERROR")
             append_file(web_archive_path, error_entry)
 
-        # ── Iteration summary ─────────────────────────────────────────────────
         iter_elapsed = time.time() - iter_start
         logger.info(
             f"  [Iter {iteration}] Done in {iter_elapsed:.0f}s | "
             f"cumulative tokens in={total_input_tokens:,} out={total_output_tokens:,}"
         )
 
-        # ── Wait between iterations ──────────────────────────────────────────
         wait_min = config.get("web_research_interval_minutes", config.get("interval_minutes", 0))
         if iteration < n_iterations and wait_min > 0:
             logger.info(f"  [Wait] Sleeping {wait_min} minute(s)...")
             time.sleep(wait_min * 60)
 
-    # ── Done ─────────────────────────────────────────────────────────────────
     logger.info(f"\n{'=' * 60}")
     logger.info("WEB RESEARCH LOOP COMPLETE")
     logger.info(f"Archive : {web_archive_path}")
