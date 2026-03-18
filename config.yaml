@@ -1,3 +1,39 @@
+# ─── SEMOSS Integration (optional) ──────────────────────────────────────────
+# Set use_semoss: true to route all LLM calls and data queries through SEMOSS
+# instead of calling the Anthropic API and reading local Excel files directly.
+#
+# Required when use_semoss is true:
+#   semoss_host      : Base URL of your SEMOSS instance, e.g. http://semoss.internal:8080
+#   semoss_model_id  : ID of the Model Engine registered in SEMOSS (LLM gateway)
+#
+# Optional:
+#   semoss_db_id     : ID of the Database Engine registered in SEMOSS.
+#                      When set, the analyst code template loads data via
+#                      SEMOSS SQL queries instead of reading a local Excel file.
+#   semoss_access_token : Bearer token (preferred over username/password)
+#   semoss_username  : SEMOSS login (used only if access_token is absent)
+#   semoss_password  : SEMOSS password
+#   semoss_verify_ssl: Set to false to skip TLS verification (dev only)
+#   semoss_sql_query : Custom SQL to load the dataset from SEMOSS (optional;
+#                      defaults to "SELECT * FROM <data_table>")
+#   data_table       : Table name in SEMOSS database (used when semoss_db_id is
+#                      set and no custom semoss_sql_query is provided)
+#
+# All values can also be supplied as environment variables:
+#   SEMOSS_HOST, SEMOSS_MODEL_ID, SEMOSS_DB_ID, SEMOSS_ACCESS_TOKEN,
+#   SEMOSS_USERNAME, SEMOSS_PASSWORD
+#
+use_semoss: false
+# semoss_host: http://semoss.internal:8080
+# semoss_model_id: <model-engine-id>
+# semoss_db_id: <database-engine-id>
+# semoss_access_token: <bearer-token>
+# semoss_username: <username>
+# semoss_password: <password>
+# semoss_verify_ssl: true
+# semoss_sql_query: "SELECT * FROM ventas"
+# data_table: ventas
+
 # ─── Global Analysis Settings ────────────────────────────────────────────────
 model: claude-sonnet-4-6
 active_context_file: docs/active_context.md

@@ -264,6 +264,22 @@ def get_current_iteration(archive_path: str) -> int:
     return max(int(i) for i in iters) if iters else 0
 
 
-def create_client() -> anthropic.Anthropic:
-    """Create an Anthropic client using the API key from env."""
+def create_client(config: dict = None):
+    """
+    Create an LLM client.
+
+    If `use_semoss: true` is present in config (or config.yaml), returns a
+    SEMOSSClient that mirrors the Anthropic interface.  Otherwise returns a
+    standard anthropic.Anthropic client.
+    """
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            config = {}
+
+    if config.get("use_semoss", False):
+        from semoss_client import create_semoss_client
+        return create_semoss_client(config)
+
     return anthropic.Anthropic(api_key=API_KEY)

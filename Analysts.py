@@ -262,6 +262,56 @@ ACTIVE_CONTEXT_TEMPLATE = """# Active Knowledge Base
 # ─── Message Builders ─────────────────────────────────────────────────────────
 
 
+def _build_data_loading_snippet(config: dict) -> str:
+    """
+    Return the Python snippet the analyst should use to load the dataset.
+
+    When SEMOSS database integration is active the snippet queries the
+    SEMOSS Database Engine via its REST API instead of reading a local file.
+    """
+    use_semoss = config.get("use_semoss", False)
+    semoss_db_id = config.get("semoss_db_id") or os.getenv("SEMOSS_DB_ID", "")
+
+    if use_semoss and semoss_db_id:
+        host = config.get("semoss_host") or os.getenv("SEMOSS_HOST", "http://localhost:8080")
+        token = config.get("semoss_access_token") or os.getenv("SEMOSS_ACCESS_TOKEN", "")
+        sql = (
+            config.get("semoss_sql_query")
+            or f"SELECT * FROM {config.get('data_table', 'data')}"
+        )
+        auth_line = (
+            f'    headers["Authorization"] = "Bearer {token}"'
+            if token
+            else "    # Add auth header here if needed"
+        )
+        return (
+            f"# ── Load data from SEMOSS Database Engine ──\n"
+            f"import requests, pandas as pd\n"
+            f'SEMOSS_HOST = "{host}"\n'
+            f'SEMOSS_DB_ID = "{semoss_db_id}"\n'
+            f'SQL = """{sql}"""\n'
+            f"headers = {{}}\n"
+            f"{auth_line}\n"
+            f"_resp = requests.post(\n"
+            f'    f"{{SEMOSS_HOST}}/api/engine/DATABASE/{{SEMOSS_DB_ID}}/sql-query",\n'
+            f'    json={{"query": SQL}}, headers=headers, timeout=60\n'
+            f")\n"
+            f"_resp.raise_for_status()\n"
+            f"_data = _resp.json().get('data', _resp.json())\n"
+            f"_headers = _data.get('headers', [])\n"
+            f"_values = _data.get('values', _data.get('data', []))\n"
+            f"df = (pd.DataFrame(_values, columns=_headers) if _headers\n"
+            f"      else pd.DataFrame(_values))\n"
+        )
+
+    data_file = config.get("data_file", "workspace/data.xlsx")
+    return (
+        f"# ── Load data from local Excel file ──\n"
+        f"import pandas as pd\n"
+        f'df = pd.read_excel("{data_file}")\n'
+    )
+
+
 def build_analyst_user_message(
     task_content: str, context: str, iteration: int, config: dict
 ) -> str:
@@ -276,6 +326,8 @@ def build_analyst_user_message(
     else:
         effective_mode = mode
 
+    data_loading_snippet = _build_data_loading_snippet(config)
+
     msg = f"""## Task Description
 
 {task_content}
@@ -286,9 +338,14 @@ def build_analyst_user_message(
 
 ## Iteration Info
 - Iteration ID: {iteration}
-- Data file path (use exactly): {data_file}
-- Load data with: df = pd.read_excel("{data_file}")
 - Graphs folder (save charts here): {graphs_folder}
+
+## Data Loading
+Use EXACTLY the following snippet to load the dataset (do not change it):
+
+```python
+{data_loading_snippet}
+```
 """
 
     if effective_mode == "hard":
@@ -336,9 +393,9 @@ def build_retry_analyst_message(
     stderr: str,
     retry_num: int,
 ) -> str:
-    data_file = config.get("data_file", "workspace/data.xlsx")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
     n = config["n_iterations"]
+    data_loading_snippet = _build_data_loading_snippet(config)
 
     return f"""## RETRY REQUEST (Attempt {retry_num})
 
@@ -367,9 +424,14 @@ Only pivot to a different approach if the error reveals the original goal is fun
 
 ## Iteration Info
 - Current iteration: {iteration} of {n}
-- Data file path (use exactly): {data_file}
-- Load data with: df = pd.read_excel("{data_file}")
 - Graphs folder: {graphs_folder}
+
+## Data Loading
+Use EXACTLY the following snippet to load the dataset (do not change it):
+
+```python
+{data_loading_snippet}
+```
 
 ## Current Knowledge Base
 {context}
