@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
+import pandas as pd
 import yaml
 from dotenv import load_dotenv
 
@@ -267,3 +268,145 @@ def get_current_iteration(archive_path: str) -> int:
 def create_client() -> anthropic.Anthropic:
     """Create an Anthropic client using the API key from env."""
     return anthropic.Anthropic(api_key=API_KEY)
+
+
+# ─── Data Registry & Catalog ────────────────────────────────────────────────
+
+
+def build_data_registry(data_folder: str) -> dict:
+    """Walk original/ and processed/ folders, build a registry of all data files.
+
+    Merges with existing registry on disk to preserve agent-provided descriptions
+    for processed files. Writes the result to data_folder/data_registry.json.
+    """
+    logger = logging.getLogger("ddanalyze")
+    registry_path = os.path.join(data_folder, "data_registry.json")
+
+    # Load existing registry to preserve descriptions
+    existing = {}
+    if Path(registry_path).exists():
+        try:
+            existing = json.loads(read_file(registry_path))
+        except (json.JSONDecodeError, Exception):
+            existing = {}
+
+    registry = {}
+
+    for subfolder, file_type in [("original", "original"), ("processed", "processed")]:
+        folder_path = Path(data_folder) / subfolder
+        if not folder_path.exists():
+            continue
+        for fpath in sorted(folder_path.iterdir()):
+            if fpath.is_dir() or fpath.name.startswith("."):
+                continue
+            rel_key = f"{subfolder}/{fpath.name}"
+            entry = {"type": file_type, "format": fpath.suffix.lstrip(".")}
+
+            # Preserve existing metadata for processed files
+            if rel_key in existing:
+                old = existing[rel_key]
+                if old.get("created_by"):
+                    entry["created_by"] = old["created_by"]
+                if old.get("description") and not old["description"].startswith("Auto-scanned"):
+                    entry["description"] = old["description"]
+
+            try:
+                if fpath.suffix.lower() in (".xlsx", ".xls"):
+                    xf = pd.ExcelFile(fpath)
+                    entry["sheets"] = xf.sheet_names
+                    df_peek = pd.read_excel(xf, sheet_name=xf.sheet_names[0], nrows=5)
+                    entry["columns"] = list(df_peek.columns)
+                    # Get full row count from first sheet
+                    df_full = pd.read_excel(xf, sheet_name=xf.sheet_names[0])
+                    entry["rows"] = len(df_full)
+                    xf.close()
+                    if "description" not in entry:
+                        entry["description"] = "Auto-scanned. Columns from first sheet."
+                elif fpath.suffix.lower() == ".csv":
+                    df_peek = pd.read_csv(fpath, nrows=5)
+                    entry["columns"] = list(df_peek.columns)
+                    # Count rows efficiently
+                    df_full = pd.read_csv(fpath)
+                    entry["rows"] = len(df_full)
+                    if "description" not in entry:
+                        entry["description"] = "Auto-scanned."
+                elif fpath.suffix.lower() == ".parquet":
+                    df = pd.read_parquet(fpath)
+                    entry["columns"] = list(df.columns)
+                    entry["rows"] = len(df)
+                    if "description" not in entry:
+                        entry["description"] = "Auto-scanned."
+                else:
+                    entry["rows"] = 0
+                    if "description" not in entry:
+                        entry["description"] = "Unknown format."
+            except Exception as e:
+                logger.warning(f"[Registry] Failed to scan {rel_key}: {e}")
+                entry["rows"] = 0
+                if "description" not in entry:
+                    entry["description"] = f"Scan failed: {e}"
+
+            registry[rel_key] = entry
+
+    # Write registry to disk
+    Path(registry_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(registry_path, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"[Registry] Built registry: {len(registry)} file(s) in {data_folder}")
+    return registry
+
+
+def format_data_catalog(registry: dict, data_folder: str) -> str:
+    """Format the data registry into a markdown catalog for the analyst prompt."""
+    original_files = {k: v for k, v in registry.items() if v.get("type") == "original"}
+    processed_files = {k: v for k, v in registry.items() if v.get("type") == "processed"}
+
+    lines = ["## Available Data"]
+
+    # Original files table
+    if original_files:
+        lines.append("")
+        lines.append("### Original Files")
+        lines.append("| File | Format | Sheets | Rows | Columns |")
+        lines.append("|------|--------|--------|------|---------|")
+        for fname, meta in sorted(original_files.items()):
+            fmt = meta.get("format", "?")
+            sheets = ", ".join(meta.get("sheets", [])) if meta.get("sheets") else "—"
+            rows = f"{meta.get('rows', 0):,}"
+            cols = meta.get("columns", [])
+            if len(cols) > 10:
+                cols_str = ", ".join(cols[:10]) + f" … and {len(cols) - 10} more"
+            else:
+                cols_str = ", ".join(cols) if cols else "—"
+            lines.append(f"| {fname} | {fmt} | {sheets} | {rows} | {cols_str} |")
+
+    # Processed files table
+    if processed_files:
+        lines.append("")
+        lines.append("### Processed Files (created by previous analysts)")
+        lines.append("| File | Rows | Created By | Description |")
+        lines.append("|------|------|------------|-------------|")
+        for fname, meta in sorted(processed_files.items()):
+            rows = f"{meta.get('rows', 0):,}"
+            created = meta.get("created_by", "—")
+            desc = meta.get("description", "—")
+            lines.append(f"| {fname} | {rows} | {created} | {desc} |")
+
+    if not original_files and not processed_files:
+        lines.append("")
+        lines.append("No data files found. Place files in workspace/data/original/.")
+
+    # How to load data
+    lines.append("")
+    lines.append("### How to load data")
+    lines.append(f'- Excel: df = pd.read_excel("{data_folder}/original/filename.xlsx")')
+    lines.append(f'- CSV: df = pd.read_csv("{data_folder}/original/filename.csv")')
+    lines.append(f'- Parquet: df = pd.read_parquet("{data_folder}/processed/filename.parquet")')
+    lines.append("You are free to use any combination of files. Processed files are a convenience, not a requirement.")
+    lines.append("")
+    lines.append("### How to save processed data")
+    lines.append(f'    df.to_parquet("{data_folder}/processed/name.parquet", index=False)')
+    lines.append('    print("DATA_SAVED: processed/name.parquet — Short description")')
+
+    return "\n".join(lines)

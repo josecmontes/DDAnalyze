@@ -591,7 +591,7 @@ def api_config_get():
     """Return the current config (non-sensitive parts)."""
     safe_keys = [
         "model", "n_iterations", "max_code_retries", "repetition_mode",
-        "web_research_iterations", "data_file", "task_file",
+        "web_research_iterations", "data_folder", "task_file",
         "orchestrator_schedule",
     ]
     return jsonify({k: _config.get(k) for k in safe_keys if k in _config})

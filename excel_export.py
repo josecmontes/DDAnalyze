@@ -804,7 +804,19 @@ def main() -> None:
 
     archive_path = config.get("archive_file", "full_archive.txt")
     context_path = config.get("active_context_file", "active_context.md")
-    data_file = config.get("data_file", "workspace/data.xlsx")
+    data_folder = config.get("data_folder", "workspace/data")
+    # Find the first xlsx/csv in original/ for backwards compatibility
+    data_file = None
+    original_dir = Path(data_folder) / "original"
+    if original_dir.exists():
+        for _ext in ("*.xlsx", "*.xls", "*.csv"):
+            _candidates = sorted(original_dir.glob(_ext))
+            if _candidates:
+                data_file = str(_candidates[0])
+                break
+    if data_file is None:
+        # Fallback: legacy config
+        data_file = config.get("data_file", "workspace/data.xlsx")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
 
     if not Path(archive_path).exists():
