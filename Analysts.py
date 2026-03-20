@@ -20,7 +20,7 @@ os.chdir(Path(__file__).parent)
 from utils import (
     read_file, write_file, append_file, load_config, setup_logging,
     call_llm_with_tokens, parse_json_response, create_client,
-    get_current_iteration,
+    get_current_iteration, build_data_registry, format_data_catalog,
 )
 
 logger = logging.getLogger("ddanalyze.loop")
@@ -115,6 +115,36 @@ You may (and should, when insightful) generate charts using matplotlib or seabor
 - Do NOT call plt.show() — running headless.
 - Set matplotlib backend before importing pyplot: import matplotlib; matplotlib.use('Agg')
 
+PROCESSED DATA — SHARED DATA LAYER:
+You have access to original data files and processed datasets from previous iterations.
+The "Available Data" section lists every file with columns and description.
+You are FREE TO CHOOSE which data source(s) to use. There is no obligation to use processed
+datasets — decide based on what your specific analysis needs. The catalog shows what's available,
+it does not constrain your choices.
+
+FIRST ITERATION GUIDANCE:
+If the knowledge base is empty, prioritize exploratory data analysis: profile the original files,
+understand their structure (sheets, columns, types, date ranges, dimensions), and identify which
+tables are clean tabular data vs. pivots or summaries. If you find clean tabular data, save it as
+parquet for faster loading in subsequent iterations. Excel files are very slow to read. Use your
+judgment: only convert clean rectangular tables, skip pivot tables, summaries, or irregular structures.
+
+To save processed data:
+    df.to_parquet("workspace/data/processed/name.parquet", index=False)
+    print("DATA_SAVED: processed/name.parquet — Short description")
+
+Good candidates: xlsx-to-parquet conversion, wide→long reshaping, client tagging/segmentation,
+date normalization, table joins, cohort assignment.
+Do NOT save one-off outputs (summary tables, chart extracts). Only save reusable transformations.
+
+TABLES — SAVING ANALYSIS OUTPUT:
+When your code prints a well-structured analysis table (revenue breakdowns, cohort waterfalls,
+concentration rankings, etc.), also save it as CSV so it is preserved for the final report.
+Save to the tables folder provided in the iteration info and print:
+    TABLE_SAVED: <filename> — <one-line description>
+Use a descriptive filename: e.g. iter{N}_revenue_by_segment.csv, iter{N}_top20_clients.csv
+Save every meaningful table — these are key deliverables that should not be lost.
+
 DELOITTE COLOR THEME — MANDATORY FOR ALL CHARTS:
 Every chart MUST follow the Deloitte visual identity. Apply it by importing the theme module
 at the very start of your code (right after setting the backend):
@@ -178,10 +208,12 @@ SUMMARIZER_SYSTEM_PROMPT = """You are an objective and professional Financial Du
 base has grown and needs to be condensed so future agents can read it efficiently.
 
 Your job:
-1. Preserve ALL section headers exactly as they are (including ## Dead Ends & Closed Paths
-   and ## Generated Graphs).
+1. Preserve ALL section headers exactly as they are (including ## Dead Ends & Closed Paths,
+   ## Generated Graphs, ## Processed Datasets, and ## Saved Tables).
 2. Keep the Analysis Index table COMPLETE — do not remove any rows.
 3. Keep the Generated Graphs table COMPLETE — do not remove any rows.
+3b. Keep the Processed Datasets table COMPLETE — do not remove any rows.
+3c. Keep the Saved Tables table COMPLETE — do not remove any rows.
 4. Condense "Established Facts": merge overlapping facts, remove redundancy,
    keep the most specific version of each insight.
 5. Condense "What Has Been Tried": keep one line per analysis done, remove verbose detail.
@@ -214,6 +246,8 @@ Your job:
    ## What Has Been Tried
    ## Dead Ends & Closed Paths
    ## Generated Graphs
+   ## Processed Datasets
+   ## Saved Tables
    ## Open Questions / Suggested Next Steps
 
 2. Analysis Index — one row per iteration (success and failure), columns: Iter | Type | Columns Used | Status | Date
@@ -228,6 +262,10 @@ Your job:
    and failed iterations).
 6. Generated Graphs — one row per graph ever saved: Iter | Filename | Description. Extract from OUTPUT lines
    that start with "GRAPH_SAVED:".
+6b. Processed Datasets — one row per dataset saved: Iter | Filename | Rows | Description. Extract from OUTPUT
+   lines that start with "DATA_SAVED:".
+6c. Saved Tables — one row per table saved: Iter | Filename | Description. Extract from OUTPUT lines
+   that start with "TABLE_SAVED:".
 7. Open Questions / Suggested Next Steps — synthesise the most relevant 5–8 open threads from EVALUATION
    suggested_followup fields, prioritising recent iterations.
 8. Do not invent findings. Only use what is in the archive.
@@ -257,24 +295,41 @@ ACTIVE_CONTEXT_TEMPLATE = """# Active Knowledge Base
 ## Generated Graphs
 | Iter | Filename | Description |
 |------|----------|-------------|
+
+## Processed Datasets
+| Iter | Filename | Rows | Description |
+|------|----------|------|-------------|
+
+## Saved Tables
+| Iter | Filename | Description |
+|------|----------|-------------|
 """
 
 # ─── Message Builders ─────────────────────────────────────────────────────────
 
 
 def build_analyst_user_message(
-    task_content: str, context: str, iteration: int, config: dict
+    task_content: str, context: str, iteration: int, config: dict,
+    registry: dict = None, data_folder: str = None,
 ) -> str:
     n = config["n_iterations"]
     mode = config["repetition_mode"]
     threshold = config.get("hybrid_threshold", 12)
-    data_file = config.get("data_file", "workspace/data.xlsx")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+    tables_folder = config.get("tables_folder", "workspace/tables")
+    if data_folder is None:
+        data_folder = config.get("data_folder", "workspace/data")
 
     if mode == "hybrid":
         effective_mode = "soft" if iteration <= threshold else "hard"
     else:
         effective_mode = mode
+
+    # Build data catalog section
+    if registry:
+        data_section = format_data_catalog(registry, data_folder)
+    else:
+        data_section = f"- Data folder: {data_folder}"
 
     msg = f"""## Task Description
 
@@ -284,11 +339,12 @@ def build_analyst_user_message(
 
 {context}
 
+{data_section}
+
 ## Iteration Info
 - Iteration ID: {iteration}
-- Data file path (use exactly): {data_file}
-- Load data with: df = pd.read_excel("{data_file}")
 - Graphs folder (save charts here): {graphs_folder}
+- Tables folder (save CSV tables here): {tables_folder}
 """
 
     if effective_mode == "hard":
@@ -335,10 +391,20 @@ def build_retry_analyst_message(
     stdout: str,
     stderr: str,
     retry_num: int,
+    registry: dict = None,
+    data_folder: str = None,
 ) -> str:
-    data_file = config.get("data_file", "workspace/data.xlsx")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+    tables_folder = config.get("tables_folder", "workspace/tables")
+    if data_folder is None:
+        data_folder = config.get("data_folder", "workspace/data")
     n = config["n_iterations"]
+
+    # Build data catalog section
+    if registry:
+        data_section = format_data_catalog(registry, data_folder)
+    else:
+        data_section = f"- Data folder: {data_folder}"
 
     return f"""## RETRY REQUEST (Attempt {retry_num})
 
@@ -365,11 +431,12 @@ The code you generated for this iteration produced an error. Please fix it.
 Fix the code to resolve this error. Maintain the same analysis goal if possible.
 Only pivot to a different approach if the error reveals the original goal is fundamentally broken.
 
+{data_section}
+
 ## Iteration Info
 - Current iteration: {iteration} of {n}
-- Data file path (use exactly): {data_file}
-- Load data with: df = pd.read_excel("{data_file}")
 - Graphs folder: {graphs_folder}
+- Tables folder (save CSV tables here): {tables_folder}
 
 ## Current Knowledge Base
 {context}
@@ -481,8 +548,109 @@ def _extract_graph_saves(stdout: str, graphs_folder: str) -> list:
     return graphs
 
 
+def _extract_data_saves(stdout: str, data_folder: str) -> list:
+    """Parse DATA_SAVED: lines from stdout. Returns list of (relative_path, description)."""
+    saves = []
+    for line in stdout.split("\n"):
+        line = line.strip()
+        if not line.startswith("DATA_SAVED:"):
+            continue
+        rest = line[len("DATA_SAVED:"):].strip()
+        if " — " in rest:
+            filename, description = rest.split(" — ", 1)
+        elif " - " in rest:
+            filename, description = rest.split(" - ", 1)
+        else:
+            filename, description = rest, ""
+        filename = filename.strip()
+        description = description.strip()
+        data_path = Path(data_folder) / filename
+        if data_path.exists():
+            saves.append((filename, description))
+            logger.debug(f"[Data] Recorded dataset: {filename} — {description}")
+        else:
+            logger.warning(f"[Data] Dataset declared but file not found: {data_path}")
+    return saves
+
+
+def _extract_table_saves(stdout: str, tables_folder: str) -> list:
+    """Parse TABLE_SAVED: lines from stdout. Returns list of (filename, description)."""
+    saves = []
+    for line in stdout.split("\n"):
+        line = line.strip()
+        if not line.startswith("TABLE_SAVED:"):
+            continue
+        rest = line[len("TABLE_SAVED:"):].strip()
+        if " — " in rest:
+            filename, description = rest.split(" — ", 1)
+        elif " - " in rest:
+            filename, description = rest.split(" - ", 1)
+        else:
+            filename, description = rest, ""
+        filename = filename.strip()
+        description = description.strip()
+        table_path = Path(tables_folder) / filename
+        if table_path.exists():
+            saves.append((filename, description))
+            logger.debug(f"[Tables] Recorded table: {filename} — {description}")
+        else:
+            logger.warning(f"[Tables] Table declared but file not found: {table_path}")
+    return saves
+
+
+def _append_to_datasets_table(content: str, new_row: str) -> str:
+    """Append a row to the ## Processed Datasets table."""
+    lines = content.split("\n")
+    last_table_line = -1
+    in_section = False
+    for i, line in enumerate(lines):
+        if "## Processed Datasets" in line:
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("## "):
+                break
+            if "|" in line:
+                last_table_line = i
+    if last_table_line == -1:
+        for i, line in enumerate(lines):
+            if "## Processed Datasets" in line:
+                insert_at = min(i + 3, len(lines))
+                lines.insert(insert_at, new_row)
+                return "\n".join(lines)
+        return content
+    lines.insert(last_table_line + 1, new_row)
+    return "\n".join(lines)
+
+
+def _append_to_tables_table(content: str, new_row: str) -> str:
+    """Append a row to the ## Saved Tables table."""
+    lines = content.split("\n")
+    last_table_line = -1
+    in_section = False
+    for i, line in enumerate(lines):
+        if "## Saved Tables" in line:
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("## "):
+                break
+            if "|" in line:
+                last_table_line = i
+    if last_table_line == -1:
+        for i, line in enumerate(lines):
+            if "## Saved Tables" in line:
+                insert_at = min(i + 3, len(lines))
+                lines.insert(insert_at, new_row)
+                return "\n".join(lines)
+        return content
+    lines.insert(last_table_line + 1, new_row)
+    return "\n".join(lines)
+
+
 def update_active_context_success(
     path: str, iteration: int, parsed: dict, evaluation: dict, graph_refs: list,
+    data_refs: list = None, table_refs: list = None,
 ) -> None:
     content = read_file(path)
     size_before = len(content)
@@ -519,6 +687,14 @@ def update_active_context_success(
     for filename, description in graph_refs:
         new_graph_row = f"| {iteration} | {filename} | {description} |"
         content = _append_to_graphs_table(content, new_graph_row)
+
+    for filename, description in (data_refs or []):
+        new_data_row = f"| {iteration} | {filename} | | {description} |"
+        content = _append_to_datasets_table(content, new_data_row)
+
+    for filename, description in (table_refs or []):
+        new_table_row = f"| {iteration} | {filename} | {description} |"
+        content = _append_to_tables_table(content, new_table_row)
 
     write_file(path, content)
     size_after = len(content)
@@ -677,7 +853,8 @@ def main() -> None:
     summarizer_every = config.get("summarizer_every_n", 10)
     max_code_retries = config.get("max_code_retries", 2)
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
-    data_file = config.get("data_file", "workspace/data.xlsx")
+    data_folder = config.get("data_folder", "workspace/data")
+    tables_folder = config.get("tables_folder", "workspace/tables")
     debug_logging = config.get("debug_logging", False)
     source = config.get("analysis_source", "scheduled")
     auto_xlsx = config.get("auto_xlsx", True)
@@ -699,6 +876,13 @@ def main() -> None:
         write_file(archive_path, "")
     Path("workspace").mkdir(exist_ok=True)
     Path(graphs_folder).mkdir(parents=True, exist_ok=True)
+    Path(tables_folder).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(data_folder, "original")).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(data_folder, "processed")).mkdir(parents=True, exist_ok=True)
+
+    # Build initial data registry
+    registry = build_data_registry(data_folder)
+    logger.info(f"[Registry] Scanned {len(registry)} data file(s) in {data_folder}")
 
     if config.get("summarize_on_start", False) and not config.get("fresh_start", False):
         logger.info("[summarize_on_start] Reconstructing active_context.md from full_archive.txt...")
@@ -729,6 +913,8 @@ def main() -> None:
     logger.info(f"Retries : up to {max_code_retries} per iteration")
     logger.info(f"Tokens  : analyst={analyst_max_tokens}  critic={max_tokens}")
     logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Tables  : {tables_folder}")
+    logger.info(f"Data    : {data_folder} ({len(registry)} files)")
     logger.info(f"Auto xlsx: {'ON' if auto_xlsx else 'OFF'}")
     logger.info(f"Log     : {log_file}")
     logger.info(f"Debug   : {'ON' if debug_logging else 'OFF'}")
@@ -755,7 +941,10 @@ def main() -> None:
             logger.debug(f"[Context] Loaded {context_path}: {len(context):,}ch")
 
             logger.info("  [Analyst] Planning analysis...")
-            analyst_msg = build_analyst_user_message(task_content, context, iteration, config)
+            analyst_msg = build_analyst_user_message(
+                task_content, context, iteration, config,
+                registry=registry, data_folder=data_folder,
+            )
             raw_analyst, in_tok, out_tok = call_llm_with_tokens(
                 client, ANALYST_SYSTEM_PROMPT, analyst_msg, model, analyst_max_tokens, tag="Analyst"
             )
@@ -795,6 +984,7 @@ def main() -> None:
                 retry_msg = build_retry_analyst_message(
                     task_content, context, iteration, config,
                     parsed, stdout, stderr, retry_count,
+                    registry=registry, data_folder=data_folder,
                 )
                 raw_retry, in_tok, out_tok = call_llm_with_tokens(
                     client, ANALYST_SYSTEM_PROMPT, retry_msg, model, analyst_max_tokens,
@@ -826,6 +1016,35 @@ def main() -> None:
             if graph_refs:
                 logger.info(f"  [Graphs] {len(graph_refs)} graph(s) saved: {', '.join(fn for fn, _ in graph_refs)}")
 
+            data_refs = _extract_data_saves(stdout, data_folder)
+            if data_refs:
+                logger.info(f"  [Data] {len(data_refs)} dataset(s) saved: {', '.join(fn for fn, _ in data_refs)}")
+                # Update registry with new processed files
+                for rel_path, desc in data_refs:
+                    import pandas as pd
+                    fpath = Path(data_folder) / rel_path
+                    entry_meta = {"type": "processed", "format": fpath.suffix.lstrip("."), "created_by": f"iteration_{iteration:03d}", "description": desc}
+                    try:
+                        if fpath.suffix == ".parquet":
+                            df_tmp = pd.read_parquet(str(fpath))
+                            entry_meta["columns"] = list(df_tmp.columns)
+                            entry_meta["rows"] = len(df_tmp)
+                        elif fpath.suffix == ".csv":
+                            df_tmp = pd.read_csv(str(fpath), nrows=5)
+                            entry_meta["columns"] = list(df_tmp.columns)
+                            with open(str(fpath)) as f_cnt:
+                                entry_meta["rows"] = sum(1 for _ in f_cnt) - 1
+                    except Exception:
+                        pass
+                    registry[rel_path] = entry_meta
+                # Write updated registry
+                registry_path = os.path.join(data_folder, "data_registry.json")
+                write_file(registry_path, json.dumps(registry, indent=2, ensure_ascii=False))
+
+            table_refs = _extract_table_saves(stdout, tables_folder)
+            if table_refs:
+                logger.info(f"  [Tables] {len(table_refs)} table(s) saved: {', '.join(fn for fn, _ in table_refs)}")
+
             logger.info("  [Critic] Evaluating...")
             critic_msg = build_critic_user_message(parsed, stdout, stderr, iteration)
             raw_critic, in_tok, out_tok = call_llm_with_tokens(
@@ -854,18 +1073,28 @@ def main() -> None:
             append_file(archive_path, entry)
 
             if status == "success":
-                update_active_context_success(context_path, iteration, parsed, evaluation, graph_refs)
+                update_active_context_success(
+                    context_path, iteration, parsed, evaluation, graph_refs,
+                    data_refs=data_refs, table_refs=table_refs,
+                )
                 n_findings = len(evaluation.get("key_findings", []))
-                logger.info(f"  [Context] Added {n_findings} finding(s), {len(graph_refs)} graph(s)")
+                logger.info(
+                    f"  [Context] Added {n_findings} finding(s), {len(graph_refs)} graph(s), "
+                    f"{len(data_refs)} dataset(s), {len(table_refs)} table(s)"
+                )
             else:
                 update_active_context_failure(context_path, iteration, parsed, evaluation)
                 logger.info(f"  [Context] Logged failure: {evaluation.get('error_type', 'unknown')}")
 
             # ── Auto-generate per-iteration xlsx ──
-            if auto_xlsx and Path(data_file).exists():
+            # Find first xlsx in original/ for auto-export (backward compat)
+            _original_dir = Path(data_folder) / "original"
+            _xlsx_files = sorted(_original_dir.glob("*.xlsx")) if _original_dir.exists() else []
+            _auto_xlsx_file = str(_xlsx_files[0]) if _xlsx_files else None
+            if auto_xlsx and _auto_xlsx_file and Path(_auto_xlsx_file).exists():
                 try:
                     xlsx_path = generate_iteration_xlsx(
-                        iteration, parsed, stdout, data_file,
+                        iteration, parsed, stdout, _auto_xlsx_file,
                     )
                     if xlsx_path:
                         logger.info(f"  [Excel] Auto-generated: {xlsx_path}")
@@ -914,6 +1143,8 @@ def main() -> None:
     logger.info(f"Archive : {archive_path}")
     logger.info(f"Context : {context_path}")
     logger.info(f"Graphs  : {graphs_folder}")
+    logger.info(f"Tables  : {tables_folder}")
+    logger.info(f"Data    : {data_folder}")
     logger.info(f"Log     : {log_file}")
     logger.info(
         f"Total tokens — input: {total_input_tokens:,}  output: {total_output_tokens:,}  "

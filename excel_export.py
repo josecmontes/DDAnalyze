@@ -804,8 +804,13 @@ def main() -> None:
 
     archive_path = config.get("archive_file", "full_archive.txt")
     context_path = config.get("active_context_file", "active_context.md")
-    data_file = config.get("data_file", "workspace/data.xlsx")
+    data_folder = config.get("data_folder", "workspace/data")
     graphs_folder = config.get("graphs_folder", "workspace/graphs")
+
+    # Find first xlsx in original/ for backward compatibility
+    _original_dir = Path(data_folder) / "original"
+    _xlsx_files = sorted(_original_dir.glob("*.xlsx")) if _original_dir.exists() else []
+    data_file = str(_xlsx_files[0]) if _xlsx_files else os.path.join(data_folder, "original", "data.xlsx")
 
     if not Path(archive_path).exists():
         logger.error(f"Archive not found: {archive_path}")

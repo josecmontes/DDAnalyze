@@ -267,3 +267,126 @@ def get_current_iteration(archive_path: str) -> int:
 def create_client() -> anthropic.Anthropic:
     """Create an Anthropic client using the API key from env."""
     return anthropic.Anthropic(api_key=API_KEY)
+
+
+# ─── Data Registry & Catalog ────────────────────────────────────────────────
+
+
+def build_data_registry(data_folder: str) -> dict:
+    """Walk original/ and processed/ under data_folder, read metadata, merge with existing registry."""
+    import pandas as pd
+
+    registry_path = os.path.join(data_folder, "data_registry.json")
+    existing = {}
+    if Path(registry_path).exists():
+        try:
+            existing = json.loads(read_file(registry_path))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+
+    registry = {}
+    for subfolder in ("original", "processed"):
+        folder = os.path.join(data_folder, subfolder)
+        if not Path(folder).exists():
+            continue
+        for fpath in sorted(Path(folder).rglob("*")):
+            if fpath.is_dir():
+                continue
+            rel = f"{subfolder}/{fpath.name}"
+            entry = existing.get(rel, {})
+            entry["type"] = subfolder
+            ext = fpath.suffix.lower().lstrip(".")
+            entry["format"] = ext
+            try:
+                if ext in ("xlsx", "xls"):
+                    xf = pd.ExcelFile(str(fpath))
+                    entry["sheets"] = xf.sheet_names
+                    df_head = pd.read_excel(xf, sheet_name=xf.sheet_names[0], nrows=5)
+                    entry["columns"] = list(df_head.columns)
+                    df_full = pd.read_excel(xf, sheet_name=xf.sheet_names[0])
+                    entry["rows"] = len(df_full)
+                    xf.close()
+                elif ext == "csv":
+                    df_head = pd.read_csv(str(fpath), nrows=5)
+                    entry["columns"] = list(df_head.columns)
+                    # Count rows without loading entire file
+                    with open(str(fpath), "r") as f:
+                        entry["rows"] = sum(1 for _ in f) - 1  # subtract header
+                elif ext == "parquet":
+                    df = pd.read_parquet(str(fpath))
+                    entry["columns"] = list(df.columns)
+                    entry["rows"] = len(df)
+                else:
+                    entry.setdefault("description", f"Unsupported format: {ext}")
+            except Exception as e:
+                entry["error"] = str(e)[:200]
+            if "description" not in entry:
+                if subfolder == "original":
+                    entry["description"] = "Auto-scanned. Columns from first sheet." if ext in ("xlsx", "xls") else "Auto-scanned."
+                else:
+                    entry.setdefault("description", "")
+            registry[rel] = entry
+
+    # Preserve agent-provided descriptions from existing registry for processed files
+    for key, old_entry in existing.items():
+        if key in registry and old_entry.get("description"):
+            if not registry[key].get("description"):
+                registry[key]["description"] = old_entry["description"]
+        if key in registry and old_entry.get("created_by"):
+            registry[key].setdefault("created_by", old_entry["created_by"])
+
+    write_file(registry_path, json.dumps(registry, indent=2, ensure_ascii=False))
+    return registry
+
+
+def format_data_catalog(registry: dict, data_folder: str) -> str:
+    """Return a markdown catalog of all available data files for injection into the analyst prompt."""
+    MAX_COLS_SHOWN = 10
+
+    def _fmt_cols(cols):
+        if not cols:
+            return ""
+        if len(cols) <= MAX_COLS_SHOWN:
+            return ", ".join(str(c) for c in cols)
+        shown = ", ".join(str(c) for c in cols[:MAX_COLS_SHOWN])
+        return f"{shown}, ... and {len(cols) - MAX_COLS_SHOWN} more"
+
+    originals = {k: v for k, v in registry.items() if v.get("type") == "original"}
+    processed = {k: v for k, v in registry.items() if v.get("type") == "processed"}
+
+    lines = ["## Available Data"]
+
+    if originals:
+        lines.append("\n### Original Files")
+        lines.append("| File | Format | Sheets | Rows | Columns |")
+        lines.append("|------|--------|--------|------|---------|")
+        for fname, meta in originals.items():
+            fmt = meta.get("format", "?")
+            sheets = ", ".join(meta["sheets"]) if "sheets" in meta else ""
+            rows = f"{meta['rows']:,}" if "rows" in meta else "?"
+            cols = _fmt_cols(meta.get("columns", []))
+            lines.append(f"| {fname} | {fmt} | {sheets} | {rows} | {cols} |")
+
+    if processed:
+        lines.append("\n### Processed Files (created by previous analysts)")
+        lines.append("| File | Rows | Created By | Description |")
+        lines.append("|------|------|------------|-------------|")
+        for fname, meta in processed.items():
+            rows = f"{meta['rows']:,}" if "rows" in meta else "?"
+            created_by = meta.get("created_by", "")
+            desc = meta.get("description", "")
+            lines.append(f"| {fname} | {rows} | {created_by} | {desc} |")
+
+    lines.append(f"""
+### How to load data
+- Excel: `df = pd.read_excel("{data_folder}/original/filename.xlsx")`
+- CSV: `df = pd.read_csv("{data_folder}/original/filename.csv")`
+- Parquet: `df = pd.read_parquet("{data_folder}/processed/filename.parquet")`
+
+You are free to use any combination of files. Processed files are a convenience, not a requirement.
+
+### How to save processed data
+    df.to_parquet("{data_folder}/processed/name.parquet", index=False)
+    print("DATA_SAVED: processed/name.parquet — Short description")""")
+
+    return "\n".join(lines)

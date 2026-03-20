@@ -2,11 +2,12 @@
 model: claude-sonnet-4-6
 active_context_file: docs/active_context.md
 archive_file: docs/full_archive.txt
-data_file: workspace/data.xlsx
+data_folder: workspace/data
 task_file: docs/task.md
 extracted_code_file: docs/extracted_code.md
 
 graphs_folder: workspace/graphs    # analyst saves PNG charts here
+tables_folder: workspace/tables    # analyst saves CSV tables here
 workspace_script: workspace/current_analysis.py
 
 max_tokens: 6000
